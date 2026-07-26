@@ -26,6 +26,9 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
+/* Das hidden-Attribut muss IMMER gewinnen – sonst liegt z. B. das
+   unsichtbare Modal über der App und blockiert alle Klicks. */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   background: var(--ink);
