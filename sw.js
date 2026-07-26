@@ -1,5 +1,9 @@
-/* Rikster Service Worker – App-Shell-Cache */
-const CACHE = 'rikster-v1';
+/* Rikster Service Worker – v2
+   Strategie:
+   - Seitenaufrufe & veränderliche Dateien (config.js, app.js, CSS …):
+     erst Netz, Cache nur als Fallback → Änderungen kommen sofort an.
+   - Große, unveränderliche Dateien (jsQR.js, Icons): erst Cache. */
+const CACHE = 'rikster-v2';
 const ASSETS = [
   './',
   'index.html',
@@ -15,10 +19,15 @@ const ASSETS = [
   'icons/apple-touch-icon.png',
   'icons/favicon.png'
 ];
+/* Diese Pfade ändern sich nie – Cache-first spart Daten */
+const IMMUTABLE = ['js/jsQR.js', 'icons/'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      /* cache:'reload' = beim Vorab-Cachen den HTTP-Cache umgehen */
+      .then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -36,7 +45,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return; /* Spotify/Wikipedia nie cachen */
 
-  /* Seitenaufrufe: erst Netz (damit Updates ankommen), sonst Cache */
+  /* Seitenaufrufe: erst Netz, sonst Cache */
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
@@ -50,17 +59,34 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  /* Statische Dateien: erst Cache, sonst Netz */
+  /* Unveränderliche Dateien: erst Cache, sonst Netz */
+  const immutable = IMMUTABLE.some((p) => url.pathname.indexOf(p) !== -1);
+  if (immutable) {
+    event.respondWith(
+      caches.match(req).then((hit) => {
+        if (hit) return hit;
+        return fetch(req).then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy));
+          }
+          return res;
+        });
+      })
+    );
+    return;
+  }
+
+  /* Alles andere (config.js, app.js, style.css …): erst Netz – immer frisch */
   event.respondWith(
-    caches.match(req).then((hit) => {
-      if (hit) return hit;
-      return fetch(req).then((res) => {
+    fetch(req, { cache: 'no-cache' })
+      .then((res) => {
         if (res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
         }
         return res;
-      });
-    })
+      })
+      .catch(() => caches.match(req))
   );
 });
