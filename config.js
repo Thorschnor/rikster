@@ -14,5 +14,5 @@
    ============================================================ */
 
 window.RIKSTER_CONFIG = {
-  SPOTIFY_CLIENT_ID: "HIER_DEINE_CLIENT_ID_EINFUEGEN"
+  SPOTIFY_CLIENT_ID: "32d85d43244d470e963998cd01723e84"
 };
