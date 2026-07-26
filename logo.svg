@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="Rikster Logo">
+  <circle cx="100" cy="100" r="97" fill="#10131B"/>
+  <g fill="none" stroke="#1E2432" stroke-width="1.4">
+    <circle cx="100" cy="100" r="93"/>
+    <circle cx="100" cy="100" r="71"/>
+    <circle cx="100" cy="100" r="59"/>
+    <circle cx="100" cy="100" r="47"/>
+  </g>
+  <g fill="none" stroke-width="4" stroke-linecap="round">
+    <circle cx="100" cy="100" r="88" stroke="#FF2E63" pathLength="100" stroke-dasharray="72 28" transform="rotate(-20 100 100)"/>
+    <circle cx="100" cy="100" r="77" stroke="#33B1FF" pathLength="100" stroke-dasharray="78 22" transform="rotate(120 100 100)"/>
+    <circle cx="100" cy="100" r="66" stroke="#3DDC84" pathLength="100" stroke-dasharray="68 32" transform="rotate(230 100 100)"/>
+    <circle cx="100" cy="100" r="55" stroke="#FFE14D" pathLength="100" stroke-dasharray="80 20" transform="rotate(40 100 100)"/>
+  </g>
+  <circle cx="100" cy="100" r="41" fill="#0B0E14"/>
+  <circle cx="100" cy="100" r="37" fill="#F7A928"/>
+  <text x="100" y="101" text-anchor="middle" dominant-baseline="central"
+        font-family="Montserrat, 'Arial Black', sans-serif" font-weight="900" font-size="46"
+        fill="#0B0E14">R</text>
+  <circle cx="100" cy="100" r="3.5" fill="#0B0E14"/>
+</svg>
