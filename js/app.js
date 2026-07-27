@@ -510,42 +510,104 @@ function loadHitsterCsv(lang) {
     });
 }
 
-function searchSpotifyTrack(meta) {
-  function runSearch(q) {
-    return api('/search?type=track&limit=10&market=from_token&q=' + encodeURIComponent(q))
-      .then(function (res) { return res.ok ? res.json() : null; })
-      .then(function (j) { return (j && j.tracks && j.tracks.items) || []; });
-  }
-  var q1 = 'track:"' + cleanTitle(meta.title).replace(/"/g, '') + '" artist:"' + meta.artist.replace(/"/g, '') + '"';
-  return runSearch(q1).then(function (items) {
-    if (items.length) return items;
-    return runSearch(cleanTitle(meta.title) + ' ' + meta.artist);
-  }).then(function (items) {
-    var nt = normalize(cleanTitle(meta.title));
-    var na = normalize(meta.artist);
-    var best = null, bestScore = -1;
-    for (var i = 0; i < items.length; i++) {
-      var t = items[i];
-      var ct = normalize(cleanTitle(t.name));
-      var artistMatch = (t.artists || []).some(function (a) {
-        var n = normalize(a.name);
-        return n === na || n.indexOf(na) !== -1 || na.indexOf(n) !== -1;
-      });
-      if (!artistMatch) continue;
-      var s = 0;
-      if (ct === nt) s += 4;
-      else if (ct.indexOf(nt) !== -1 || nt.indexOf(ct) !== -1) s += 2;
-      var y = parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10);
-      if (meta.year && isFinite(y)) {
-        var yd = Math.abs(y - meta.year);
-        if (yd === 0) s += 3; else if (yd <= 1) s += 2; else if (yd <= 3) s += 1; else if (yd >= 15) s -= 1;
-      }
-      s += (t.popularity || 0) / 100;
-      if (s > bestScore) { bestScore = s; best = t; }
+/* Markt für die Suche: echtes Länderkürzel aus dem Profil (gecacht) –
+   "from_token" akzeptiert die Such-Schnittstelle nicht zuverlässig. */
+function searchMarket() {
+  try {
+    var c = localStorage.getItem('rikster_country');
+    if (c && /^[A-Z]{2}$/.test(c)) return '&market=' + c;
+  } catch (e) { /* egal */ }
+  return '';
+}
+
+function searchTracks(q, limit, offset) {
+  var url = '/search?type=track&limit=' + (limit || 20) +
+    (offset ? '&offset=' + offset : '') +
+    searchMarket() +
+    '&q=' + encodeURIComponent(q);
+  return api(url).then(function (res) {
+    if (!res.ok) {
+      console.warn('Spotify-Suche fehlgeschlagen', res.status, q);
+      return [];
     }
-    if (best && bestScore >= 2) return best.id;
-    if (best) return best.id; /* Interpret passt – lieber spielen als abbrechen */
-    throw { code: 'NO_MATCH' };
+    return res.json().then(function (j) {
+      return (j && j.tracks && j.tracks.items) || [];
+    });
+  });
+}
+
+/* Hauptinterpret aus CSV-Angaben wie "A feat. B", "A & B", "A x B" */
+function mainArtist(artist) {
+  var s = String(artist || '');
+  var parts = s.split(/\s+(?:feat\.?|ft\.?|featuring|vs\.?)\s+|\s*&\s*|\s+x\s+/i);
+  return ((parts[0] || s).trim()) || s;
+}
+
+function searchSpotifyTrack(meta) {
+  var title = cleanTitle(meta.title);
+  var main = mainArtist(meta.artist);
+  var queries = [
+    'track:"' + title.replace(/"/g, '') + '" artist:"' + main.replace(/"/g, '') + '"',
+    title + ' ' + main
+  ];
+  if (normalize(main) !== normalize(meta.artist)) queries.push(title + ' ' + meta.artist);
+  queries.push(title); /* letzte Rettung: nur der Titel */
+
+  var nt = normalize(title);
+  var candidates = String(meta.artist)
+    .split(/\s+(?:feat\.?|ft\.?|featuring|vs\.?)\s+|\s*[&,+\/]\s*|\s+x\s+/i)
+    .map(normalize)
+    .filter(function (x) { return x.length >= 2; });
+  candidates.push(normalize(meta.artist));
+
+  function artistMatches(t) {
+    return (t.artists || []).some(function (a) {
+      var n = normalize(a.name);
+      if (!n) return false;
+      return candidates.some(function (c) {
+        return n === c || n.indexOf(c) !== -1 || c.indexOf(n) !== -1;
+      });
+    });
+  }
+  function titleSim(t) {
+    var ct = normalize(cleanTitle(t.name));
+    if (!ct) return 0;
+    if (ct === nt) return 2;
+    if (ct.indexOf(nt) !== -1 || nt.indexOf(ct) !== -1) return 1;
+    return 0;
+  }
+  function yearScore(t) {
+    var y = parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10);
+    if (!meta.year || !isFinite(y)) return 0;
+    var yd = Math.abs(y - meta.year);
+    if (yd === 0) return 3;
+    if (yd <= 1) return 2;
+    if (yd <= 3) return 1;
+    if (yd >= 15) return -1;
+    return 0;
+  }
+
+  /* Suchstufen nacheinander, bis eine Treffer liefert */
+  var step = Promise.resolve([]);
+  queries.forEach(function (q) {
+    step = step.then(function (items) {
+      if (items.length) return items;
+      return searchTracks(q, 20);
+    });
+  });
+
+  return step.then(function (items) {
+    if (!items.length) throw { code: 'NO_MATCH' };
+    var best = null, bestScore = -Infinity;
+    items.forEach(function (t) {
+      var am = artistMatches(t);
+      var ts = titleSim(t);
+      if (!am && !ts) return; /* weder Interpret noch Titel passen */
+      var s = (am ? 4 : 0) + ts * 2 + yearScore(t) + (t.popularity || 0) / 100;
+      if (s > bestScore) { bestScore = s; best = t; }
+    });
+    if (!best) throw { code: 'NO_MATCH' };
+    return best.id;
   });
 }
 
@@ -954,9 +1016,7 @@ function fetchYearContext(info) {
 function fetchYearSongs(info, year) {
   var offset = pickRandom([0, 40, 80]);
   function search(off) {
-    return api('/search?type=track&limit=50&market=from_token&offset=' + off + '&q=' + encodeURIComponent('year:' + year))
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { return (j && j.tracks && j.tracks.items) || []; });
+    return searchTracks('year:' + year, 50, off);
   }
   return search(offset).then(function (items) {
     if (!items.length && offset > 0) return search(0);
@@ -1029,9 +1089,7 @@ function prepareHints(info) {
 function hintSameYearSong(info, year) {
   var offset = pickRandom([0, 40, 80, 120]);
   function search(off) {
-    return api('/search?type=track&limit=50&market=from_token&offset=' + off + '&q=' + encodeURIComponent('year:' + year))
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { return (j && j.tracks && j.tracks.items) || []; });
+    return searchTracks('year:' + year, 50, off);
   }
   return search(offset).then(function (items) {
     if (!items.length && offset > 0) return search(0);
@@ -1604,6 +1662,7 @@ function hydrateProfile() {
     return r.json();
   }).then(function (me) {
     if (!me) return;
+    if (me.country) { try { localStorage.setItem('rikster_country', me.country); } catch (e) { /* egal */ } }
     $('#userName').textContent = me.display_name || me.id;
     $('#userLine').hidden = false;
     if (me.product && me.product !== 'premium') {
