@@ -1,18 +1,22 @@
 /* ============================================================
-   RIKSTER – App-Logik
+   RIKSTER – App-Logik (v2)
    ------------------------------------------------------------
    Ablauf:  Spielen → QR scannen → Song läuft (nur Schallplatte
-   sichtbar) → "Weiter" (stoppen + neue Karte) oder "Auflösung"
-   (Karte + Zusatzinfos, Zurück-Button unten).
+   sichtbar) → "Weiter" (stoppen + neue Karte), optional
+   "Hinweis" (3 Hinweise pro Lied) und "Auflösung".
+
+   Unterstützte Karten:
+   1) Eigene Karten aus dem hitster-card-generator
+      (QR = Spotify-Track-Link)
+   2) Offizielle Hitster-Karten (QR = hitstergame.com/…) –
+      Zuordnung über die Community-Datenbank des SongSeeker-
+      Projekts (github.com/andygruber/songseeker-hitster-playlists),
+      danach Suche des Songs über die Spotify-API.
 
    Wiedergabe – zwei Modi, automatisch gewählt:
-   1) "sdk"    – Spotify Web Playback SDK: der Ton kommt direkt
-                 aus der Rikster-App (funktioniert v. a. auf
-                 Android/Chrome zuverlässig).
-   2) "remote" – Fallback über die Spotify-Connect-API: Rikster
-                 steuert die Spotify-App im Hintergrund fern.
-                 Man bleibt trotzdem die ganze Zeit in Rikster
-                 und sieht nichts vom Lied. (Zuverlässig auf iOS.)
+   1) "sdk"    – Spotify Web Playback SDK (Ton direkt in der App)
+   2) "remote" – Fallback: Rikster steuert die Spotify-App im
+                 Hintergrund fern (zuverlässig auf iOS).
    ============================================================ */
 
 'use strict';
@@ -23,26 +27,37 @@ var CLIENT_ID = String(CFG.SPOTIFY_CLIENT_ID || '').trim();
 var REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
 var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
 var API_BASE = 'https://api.spotify.com/v1';
+var HITSTER_DB = 'https://raw.githubusercontent.com/andygruber/songseeker-hitster-playlists/main/';
+var CORS_PROXIES = [
+  'https://api.allorigins.win/raw?url=',
+  'https://corsproxy.io/?url='
+];
 var LS = {
   access: 'rikster_access',
   refresh: 'rikster_refresh',
   expires: 'rikster_expires',
-  verifier: 'rikster_verifier'
+  verifier: 'rikster_verifier',
+  assists: 'rikster_assists',
+  party: 'rikster_party'
 };
 
 /* ---------- Zustand ---------- */
 var state = {
-  mode: null,            /* 'sdk' | 'remote' | null (noch unbekannt) */
+  mode: null,
   sdkPlayer: null,
   sdkDeviceId: null,
   sdkReady: false,
   currentTrackId: null,
+  cardMeta: null,          /* bei offiziellen Karten: {artist,title,year} */
   trackInfo: null,
   infoPromise: null,
   scanning: false,
   playing: false,
   camStream: null,
-  wakeLock: null
+  wakeLock: null,
+  assists: true,
+  gameMode: 'normal',
+  hints: { list: null, idx: -1, promise: null }
 };
 
 /* ---------- Kleine Helfer ---------- */
@@ -94,7 +109,7 @@ function formatDuration(ms) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') + ' min';
 }
 function formatRelease(release, precision) {
-  if (!release) return '\u2013';
+  if (!release) return null;
   try {
     if (precision === 'day') {
       var d = new Date(release + 'T00:00:00');
@@ -105,11 +120,37 @@ function formatRelease(release, precision) {
       var dm = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
       return new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' }).format(dm);
     }
-  } catch (e) { /* egal, dann nur Jahr */ }
+  } catch (e) { /* dann nur Jahr */ }
   return release.slice(0, 4);
 }
 function safeJson(res) {
   return res.json().then(function (j) { return j; }, function () { return null; });
+}
+function normalize(s) {
+  return String(s || '').toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function cleanTitle(t) {
+  return String(t || '')
+    .replace(/\s*[-\u2013]\s*(remaster|single|radio|live|version|edit|mono|stereo|from)[^]*$/i, '')
+    .replace(/\s*\((feat|with|from|remaster|live|radio|deluxe|bonus)[^)]*\)/ig, '')
+    .trim();
+}
+function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function fetchWithTimeout(url, ms, opts) {
+  var ctrl = ('AbortController' in window) ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, ms) : null;
+  var o = opts || {};
+  if (ctrl) o.signal = ctrl.signal;
+  return fetch(url, o).finally(function () { if (timer) clearTimeout(timer); });
+}
+function countryNameDe(iso) {
+  if (!iso) return null;
+  try {
+    var dn = new Intl.DisplayNames(['de'], { type: 'region' });
+    return dn.of(iso) || iso;
+  } catch (e) { return iso; }
 }
 
 /* ============================================================
@@ -322,17 +363,12 @@ function setModeBadge(txt) {
   if (b) b.textContent = txt;
 }
 
-/* Auf iOS/Android braucht Audio eine Nutzer-Geste – bei jedem
-   Button-Tipp einmal "aktivieren", dann darf danach automatisch
-   abgespielt werden. */
 function activateAudio() {
   try {
     if (state.sdkPlayer && state.sdkPlayer.activateElement) state.sdkPlayer.activateElement();
   } catch (e) { /* egal */ }
 }
 
-/* Sperrbildschirm/Benachrichtigung soll den Songtitel nicht
-   verraten – bestmöglich mit neutralen Infos überschreiben. */
 function maskMediaSession() {
   try {
     if ('mediaSession' in navigator && window.MediaMetadata) {
@@ -348,17 +384,14 @@ function maskMediaSession() {
 
 function playTrack(trackId) {
   var body = JSON.stringify({ uris: ['spotify:track:' + trackId], position_ms: 0 });
-
   return initPlayback().then(function (mode) {
-    /* Modus 1: direkt in der App über das SDK */
     if (mode === 'sdk' && state.sdkReady && state.sdkDeviceId) {
       return api('/me/player/play?device_id=' + state.sdkDeviceId, { method: 'PUT', body: body })
         .then(function (res) {
           if (res.ok || res.status === 204) return true;
-          return playRemote(body); /* falls das SDK-Gerät zickt: Fallback */
+          return playRemote(body);
         });
     }
-    /* Modus 2: Spotify-App fernsteuern */
     return playRemote(body);
   });
 }
@@ -395,10 +428,145 @@ function stopPlayback() {
 }
 
 /* ============================================================
+   OFFIZIELLE HITSTER-KARTEN
+   ------------------------------------------------------------
+   QR-Inhalt: https://www.hitstergame.com/{edition}/{nummer}
+   z. B. …/de/00123 oder …/de-aaaa0012/237
+   Die Community-CSV liefert Interpret/Titel/Jahr zur Nummer,
+   danach suchen wir den Song über die Spotify-API.
+   ============================================================ */
+var csvMemCache = {};
+
+function parseScan(text) {
+  if (!text) return null;
+  var s = String(text).trim().replace(/[?#].*$/, '');
+  var m = s.match(/(?:open\.spotify\.com\/(?:intl-[a-z]{2}(?:-[A-Za-z]{2})?\/)?track\/|spotify:track:)([A-Za-z0-9]{22})/i);
+  if (m) return { kind: 'spotify', id: m[1] };
+  m = s.match(/hitstergame\.com\/(.+?)\/(\d{1,6})\/?$/i);
+  if (m) return { kind: 'hitster', lang: m[1].toLowerCase().replace(/\//g, '-'), num: parseInt(m[2], 10) };
+  m = s.match(/app\.hitsternordics\.com\/resources\/songs\/(\d{1,6})\/?$/i);
+  if (m) return { kind: 'hitster', lang: 'nordics', num: parseInt(m[1], 10) };
+  return null;
+}
+
+function parseCsv(text) {
+  var rows = [], row = [], field = '', q = false;
+  for (var i = 0; i < text.length; i++) {
+    var c = text[i];
+    if (q) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else { q = false; }
+      } else { field += c; }
+    } else {
+      if (c === '"') q = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else if (c !== '\r') field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function loadHitsterCsv(lang) {
+  if (csvMemCache[lang]) return Promise.resolve(csvMemCache[lang]);
+  var lsKey = 'rikster_hitcsv_' + lang;
+  var cached = null;
+  try { cached = JSON.parse(localStorage.getItem(lsKey) || 'null'); } catch (e) { cached = null; }
+  var fresh = cached && (Date.now() - cached.t < 7 * 24 * 3600 * 1000);
+
+  function build(text) {
+    var rows = parseCsv(text);
+    var map = {};
+    for (var i = 1; i < rows.length; i++) { /* Zeile 0 = Kopf */
+      var r = rows[i];
+      if (!r || r.length < 3) continue;
+      var num = parseInt(r[0], 10);
+      if (!isFinite(num)) continue;
+      map[num] = {
+        artist: (r[1] || '').trim(),
+        title: (r[2] || '').trim(),
+        year: parseInt(r[r.length - 1], 10) || null /* letzte Spalte = Jahr */
+      };
+    }
+    csvMemCache[lang] = map;
+    return map;
+  }
+
+  if (fresh) return Promise.resolve(build(cached.text));
+
+  return fetchWithTimeout(HITSTER_DB + 'hitster-' + lang + '.csv', 12000)
+    .then(function (res) {
+      if (!res.ok) throw { code: 'CSV_MISSING' };
+      return res.text();
+    })
+    .then(function (text) {
+      try { localStorage.setItem(lsKey, JSON.stringify({ t: Date.now(), text: text })); } catch (e) { /* Quota egal */ }
+      return build(text);
+    })
+    .catch(function (err) {
+      if (cached && cached.text) return build(cached.text); /* alter Cache besser als nichts */
+      throw (err && err.code) ? err : { code: 'CSV_NETWORK' };
+    });
+}
+
+function searchSpotifyTrack(meta) {
+  function runSearch(q) {
+    return api('/search?type=track&limit=10&market=from_token&q=' + encodeURIComponent(q))
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (j) { return (j && j.tracks && j.tracks.items) || []; });
+  }
+  var q1 = 'track:"' + cleanTitle(meta.title).replace(/"/g, '') + '" artist:"' + meta.artist.replace(/"/g, '') + '"';
+  return runSearch(q1).then(function (items) {
+    if (items.length) return items;
+    return runSearch(cleanTitle(meta.title) + ' ' + meta.artist);
+  }).then(function (items) {
+    var nt = normalize(cleanTitle(meta.title));
+    var na = normalize(meta.artist);
+    var best = null, bestScore = -1;
+    for (var i = 0; i < items.length; i++) {
+      var t = items[i];
+      var ct = normalize(cleanTitle(t.name));
+      var artistMatch = (t.artists || []).some(function (a) {
+        var n = normalize(a.name);
+        return n === na || n.indexOf(na) !== -1 || na.indexOf(n) !== -1;
+      });
+      if (!artistMatch) continue;
+      var s = 0;
+      if (ct === nt) s += 4;
+      else if (ct.indexOf(nt) !== -1 || nt.indexOf(ct) !== -1) s += 2;
+      var y = parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10);
+      if (meta.year && isFinite(y)) {
+        var yd = Math.abs(y - meta.year);
+        if (yd === 0) s += 3; else if (yd <= 1) s += 2; else if (yd <= 3) s += 1; else if (yd >= 15) s -= 1;
+      }
+      s += (t.popularity || 0) / 100;
+      if (s > bestScore) { bestScore = s; best = t; }
+    }
+    if (best && bestScore >= 2) return best.id;
+    if (best) return best.id; /* Interpret passt – lieber spielen als abbrechen */
+    throw { code: 'NO_MATCH' };
+  });
+}
+
+function resolveHitsterCard(scan) {
+  return loadHitsterCsv(scan.lang).then(function (map) {
+    var meta = map[scan.num];
+    if (!meta || !meta.title) throw { code: 'CARD_UNKNOWN' };
+    return searchSpotifyTrack(meta).then(function (id) {
+      return { id: id, meta: meta };
+    }).catch(function (err) {
+      if (err && err.code === 'NO_MATCH') throw { code: 'NO_MATCH', meta: meta };
+      throw err;
+    });
+  });
+}
+
+/* ============================================================
    SONG-INFOS für die Auflösung
    ============================================================ */
-function fetchTrackInfo(trackId) {
-  return api('/tracks/' + trackId).then(function (res) {
+function fetchTrackInfo(trackId, cardMeta) {
+  return api('/tracks/' + trackId + '?market=from_token').then(function (res) {
     if (!res.ok) throw new Error('track ' + res.status);
     return res.json();
   }).then(function (t) {
@@ -417,36 +585,73 @@ function fetchTrackInfo(trackId) {
       duration: t.duration_ms,
       popularity: t.popularity
     };
-    /* Zusatzinfos parallel und fehlertolerant nachladen */
-    var jobs = [];
-    if (info.artistId) {
-      jobs.push(api('/artists/' + info.artistId).then(function (r) {
-        return r.ok ? r.json() : null;
-      }).then(function (a) {
-        if (a) {
-          info.genres = a.genres || [];
-          info.followers = a.followers && a.followers.total;
-        }
-      }).catch(function () { /* egal */ }));
+    /* Bei offiziellen Karten gilt das Jahr der Karte – Spotify listet
+       oft Remaster/Compilations mit späterem Datum. */
+    if (cardMeta) {
+      info.cardArtist = cardMeta.artist;
+      if (cardMeta.year) {
+        var sy = parseInt(info.year, 10);
+        info.year = String(cardMeta.year);
+        if (isFinite(sy) && sy !== cardMeta.year) { info.release = null; info.precision = null; }
+      }
     }
-    if (info.albumId) {
-      jobs.push(api('/albums/' + info.albumId).then(function (r) {
-        return r.ok ? r.json() : null;
-      }).then(function (al) {
-        if (al) {
-          info.label = al.label;
-          info.albumTracks = al.total_tracks;
-        }
-      }).catch(function () { /* egal */ }));
-    }
-    if (info.artists[0]) {
-      jobs.push(fetchWiki(info.artists[0]).then(function (w) { info.wiki = w; }).catch(function () { /* egal */ }));
-    }
-    return Promise.all(jobs).then(function () { return info; });
+    info.extras = fetchExtras(info);
+    return info;
   });
 }
 
-/* Wikipedia-Kurzporträt des Interpreten (erst deutsch, dann englisch) */
+/* Zusatzinfos aus mehreren Quellen – alles best-effort und parallel */
+function fetchExtras(info) {
+  var jobs = [];
+
+  /* Spotify: Genres + Follower des Interpreten */
+  if (info.artistId) {
+    jobs.push(api('/artists/' + info.artistId).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (a) {
+      if (a) {
+        if (a.genres && a.genres.length) info.genres = a.genres;
+        info.followers = a.followers && a.followers.total;
+      }
+    }).catch(function () { /* egal */ }));
+  }
+
+  /* Spotify: Label */
+  if (info.albumId) {
+    jobs.push(api('/albums/' + info.albumId).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (al) {
+      if (al) info.label = al.label;
+    }).catch(function () { /* egal */ }));
+  }
+
+  /* Wikipedia: Kurzporträt des Interpreten */
+  if (info.artists[0]) {
+    jobs.push(fetchWiki(info.artists[0]).then(function (w) { info.wiki = w; }).catch(function () { /* egal */ }));
+  }
+
+  /* MusicBrainz: Herkunftsland des Interpreten */
+  if (info.artists[0]) {
+    jobs.push(fetchArtistCountry(info.artists[0]).then(function (c) {
+      if (c) info.country = c;
+    }).catch(function () { /* egal */ }));
+  }
+
+  /* Deutsche Wikipedia (Song-Artikel): Charts, Auszeichnungen, Verkäufe
+     + Wikidata: Sprache des Songs */
+  jobs.push(fetchSongArticleData(info).catch(function () { /* egal */ }));
+
+  /* Jahres-Kontext: 5 weitere Lieder + 5 Ereignisse desselben Jahres */
+  jobs.push(fetchYearContext(info).catch(function () { /* egal */ }));
+
+  /* Songfacts: erster Fact, übersetzt */
+  jobs.push(fetchSongfact(info).then(function (sf) {
+    if (sf) info.songfact = sf;
+  }).catch(function () { /* egal */ }));
+
+  return Promise.all(jobs).then(function () { return info; });
+}
+
 function fetchWiki(artist) {
   var langs = ['de', 'en'];
   var chain = Promise.resolve(null);
@@ -472,6 +677,498 @@ function fetchWiki(artist) {
   return chain;
 }
 
+function fetchArtistCountry(artistName) {
+  var url = 'https://musicbrainz.org/ws/2/artist/?fmt=json&limit=1&query=artist:%22' +
+    encodeURIComponent(artistName.replace(/"/g, '')) + '%22';
+  return fetchWithTimeout(url, 9000).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (j) {
+    var a = j && j.artists && j.artists[0];
+    if (!a || (a.score && a.score < 90)) return null;
+    if (a.country) return countryNameDe(a.country);
+    if (a.area && a.area.name) return a.area.name;
+    return null;
+  });
+}
+
+/* ---------- Deutsche Wikipedia: Song-Artikel finden & auswerten ---------- */
+function findDeSongArticle(info) {
+  var q = '"' + cleanTitle(info.name) + '" ' + info.artists[0];
+  var url = 'https://de.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=5&srsearch=' +
+    encodeURIComponent(q);
+  return fetchWithTimeout(url, 9000).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (j) {
+    var hits = (j && j.query && j.query.search) || [];
+    var nt = normalize(cleanTitle(info.name));
+    var best = null;
+    for (var i = 0; i < hits.length; i++) {
+      var ti = hits[i].title;
+      var n = normalize(ti);
+      if (n.indexOf(nt) === -1) continue;
+      /* Lied-Artikel bevorzugen, Alben/Interpreten-Seiten meiden */
+      if (/\((.*lied.*|.*song.*)\)/i.test(ti)) return ti;
+      if (!best && n !== normalize(info.artists[0])) best = ti;
+    }
+    return best;
+  });
+}
+
+function fetchSongArticleData(info) {
+  return findDeSongArticle(info).then(function (title) {
+    var qidJob = null;
+    if (title) {
+      qidJob = fetch('https://de.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title.replace(/ /g, '_')))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) { return j && j.wikibase_item; })
+        .catch(function () { return null; });
+    } else {
+      qidJob = findSongQidViaEnwiki(info);
+    }
+
+    var htmlJob = title
+      ? fetchWithTimeout('https://de.wikipedia.org/api/rest_v1/page/html/' + encodeURIComponent(title.replace(/ /g, '_')), 12000)
+          .then(function (r) { return r.ok ? r.text() : null; })
+          .catch(function () { return null; })
+      : Promise.resolve(null);
+
+    return Promise.all([htmlJob, qidJob]).then(function (res) {
+      var html = res[0], qid = res[1];
+      if (html) {
+        try { parseDeSongHtml(html, info); } catch (e) { /* egal */ }
+      }
+      if (qid) return applyWikidata(qid, info);
+      return null;
+    });
+  });
+}
+
+function parseDeSongHtml(html, info) {
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  var artistOk = normalize(doc.body.textContent).indexOf(normalize(info.artists[0])) !== -1;
+  if (!artistOk) return; /* falscher Artikel – lieber nichts anzeigen */
+
+  /* Chartplatzierungen: Tabellenzeilen wie  DE | 4 | … (26 Wo.) */
+  var rows = doc.querySelectorAll('tr');
+  var charts = [];
+  for (var i = 0; i < rows.length; i++) {
+    var cells = rows[i].querySelectorAll('td,th');
+    if (cells.length < 2) continue;
+    var c0 = (cells[0].textContent || '').trim();
+    var cm = c0.match(/^([A-Z]{2})\b/);
+    if (!cm || ['DE', 'AT', 'CH', 'UK', 'US'].indexOf(cm[1]) === -1) continue;
+    var rowText = rows[i].textContent || '';
+    var peak = null;
+    for (var k = 1; k < cells.length; k++) {
+      var pm = (cells[k].textContent || '').trim().match(/^(\d{1,3})\b/);
+      if (pm) { peak = parseInt(pm[1], 10); break; }
+    }
+    if (peak === null || peak < 1 || peak > 150) continue;
+    var wm = rowText.match(/(\d{1,3})\s*Wo/);
+    charts.push({ region: cm[1], peak: peak, weeks: wm ? parseInt(wm[1], 10) : null });
+  }
+  if (charts.length) {
+    var best = charts[0];
+    for (var b = 1; b < charts.length; b++) { if (charts[b].peak < best.peak) best = charts[b]; }
+    info.chartPeak = { pos: best.peak, region: best.region };
+    var de = null;
+    for (var d = 0; d < charts.length; d++) { if (charts[d].region === 'DE' && charts[d].weeks) { de = charts[d]; break; } }
+    var wsrc = de || (best.weeks ? best : null);
+    if (!wsrc) {
+      for (var w = 0; w < charts.length; w++) { if (charts[w].weeks) { wsrc = charts[w]; break; } }
+    }
+    if (wsrc && wsrc.weeks) info.chartWeeks = { n: wsrc.weeks, region: wsrc.region };
+  }
+
+  /* Auszeichnungen für Musikverkäufe + Verkaufszahlen */
+  var tables = doc.querySelectorAll('table');
+  for (var t = 0; t < tables.length; t++) {
+    var txt = tables[t].textContent || '';
+    if (txt.indexOf('Auszeichnungen f\u00fcr Musikverk\u00e4ufe') === -1) continue;
+    var totals = { Gold: 0, Platin: 0, Diamant: 0 };
+    var re = /(?:(\d+)\s*[\u00d7x]\s*)?\b(Gold|Platin|Diamant)\b/g;
+    var mm;
+    while ((mm = re.exec(txt)) !== null) {
+      totals[mm[2]] += mm[1] ? parseInt(mm[1], 10) : 1;
+    }
+    var parts = [];
+    ['Diamant', 'Platin', 'Gold'].forEach(function (k) {
+      if (totals[k] > 0) parts.push(totals[k] + '\u00d7 ' + k);
+    });
+    if (parts.length) info.awards = parts.join(' \u00b7 ');
+    var sm = txt.match(/Insgesamt[^0-9]{0,40}([\d.][\d.\s]*\d)/);
+    if (sm) {
+      var salesNum = parseInt(sm[1].replace(/[^\d]/g, ''), 10);
+      if (isFinite(salesNum) && salesNum > 1000) info.sales = formatNumber(salesNum);
+    }
+    break;
+  }
+}
+
+function findSongQidViaEnwiki(info) {
+  var q = '"' + cleanTitle(info.name) + '" ' + info.artists[0] + ' song';
+  var url = 'https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=3&srsearch=' +
+    encodeURIComponent(q);
+  return fetchWithTimeout(url, 9000).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (j) {
+    var hits = (j && j.query && j.query.search) || [];
+    var nt = normalize(cleanTitle(info.name));
+    for (var i = 0; i < hits.length; i++) {
+      if (normalize(hits[i].title).indexOf(nt) !== -1) {
+        return fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(hits[i].title.replace(/ /g, '_')))
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (s) { return s && s.wikibase_item; })
+          .catch(function () { return null; });
+      }
+    }
+    return null;
+  }).catch(function () { return null; });
+}
+
+/* Wikidata: Sprache des Songs (P407), Verkaufszahlen (P2664) als Fallback */
+function applyWikidata(qid, info) {
+  return fetchWithTimeout('https://www.wikidata.org/wiki/Special:EntityData/' + qid + '.json', 9000)
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      var ent = j && j.entities && j.entities[qid];
+      if (!ent || !ent.claims) return null;
+      var claims = ent.claims;
+      var langClaim = claims.P407 && claims.P407[0] && claims.P407[0].mainsnak &&
+        claims.P407[0].mainsnak.datavalue && claims.P407[0].mainsnak.datavalue.value;
+      var salesClaim = claims.P2664 && claims.P2664[0] && claims.P2664[0].mainsnak &&
+        claims.P2664[0].mainsnak.datavalue && claims.P2664[0].mainsnak.datavalue.value;
+      if (salesClaim && salesClaim.amount && !info.sales) {
+        var amt = parseInt(String(salesClaim.amount).replace('+', ''), 10);
+        if (isFinite(amt) && amt > 1000) info.sales = formatNumber(amt);
+      }
+      if (langClaim && langClaim.id) {
+        return fetchWithTimeout('https://www.wikidata.org/w/api.php?action=wbgetentities&props=labels&languages=de%7Cen&format=json&origin=*&ids=' + langClaim.id, 9000)
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (lj) {
+            var le = lj && lj.entities && lj.entities[langClaim.id];
+            var lab = le && le.labels && (le.labels.de || le.labels.en);
+            if (lab && lab.value) info.language = lab.value;
+          })
+          .catch(function () { /* egal */ });
+      }
+      return null;
+    });
+}
+
+/* ---------- Songfacts: erster Fact, ins Deutsche übersetzt ---------- */
+function songfactsSlug(s) {
+  return String(s || '').toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/['\u2019]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function proxyFetch(url) {
+  var chain = Promise.reject(new Error('start'));
+  CORS_PROXIES.forEach(function (proxy) {
+    chain = chain.catch(function () {
+      return fetchWithTimeout(proxy + encodeURIComponent(url), 9000).then(function (r) {
+        if (!r.ok) throw new Error('proxy ' + r.status);
+        return r.text();
+      });
+    });
+  });
+  return chain;
+}
+
+function translateToGerman(text) {
+  var gtx = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=de&dt=t&q=' + encodeURIComponent(text);
+  return fetchWithTimeout(gtx, 9000).then(function (r) {
+    if (!r.ok) throw new Error('gtx ' + r.status);
+    return r.json();
+  }).then(function (j) {
+    var out = '';
+    if (j && j[0]) {
+      for (var i = 0; i < j[0].length; i++) { if (j[0][i] && j[0][i][0]) out += j[0][i][0]; }
+    }
+    if (out.length < 10) throw new Error('leer');
+    return { text: out, translated: true };
+  }).catch(function () {
+    var short = text.slice(0, 450);
+    return fetchWithTimeout('https://api.mymemory.translated.net/get?langpair=en%7Cde&q=' + encodeURIComponent(short), 9000)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        var tr = j && j.responseData && j.responseData.translatedText;
+        if (tr && tr.length > 10 && !/MYMEMORY/i.test(tr)) return { text: tr, translated: true };
+        return { text: text, translated: false };
+      })
+      .catch(function () { return { text: text, translated: false }; });
+  });
+}
+
+function fetchSongfact(info) {
+  var artist = info.cardArtist || info.artists[0];
+  var url = 'https://www.songfacts.com/facts/' + songfactsSlug(artist) + '/' + songfactsSlug(cleanTitle(info.name));
+  return proxyFetch(url).then(function (html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var heads = doc.querySelectorAll('h1,h2,h3,h4,h5');
+    var fact = null;
+    for (var i = 0; i < heads.length; i++) {
+      var ht = (heads[i].textContent || '').trim();
+      if (!/songfacts/i.test(ht) || /more songfacts/i.test(ht)) continue;
+      var el = heads[i].nextElementSibling;
+      var hops = 0;
+      while (el && hops < 4) {
+        if (el.tagName === 'UL' || el.tagName === 'OL') {
+          var li = el.querySelector('li');
+          if (li) fact = li.textContent;
+          break;
+        }
+        el = el.nextElementSibling;
+        hops++;
+      }
+      if (fact) break;
+    }
+    if (!fact) return null;
+    fact = fact.replace(/\s+/g, ' ').trim();
+    if (fact.length < 30) return null;
+    if (fact.length > 900) fact = fact.slice(0, 900).replace(/\s+\S*$/, '') + ' \u2026';
+    return translateToGerman(fact).then(function (tr) {
+      return { text: tr.text, translated: tr.translated, url: url };
+    });
+  }).catch(function () { return null; });
+}
+
+/* ---------- Jahres-Kontext für die Auflösung ---------- */
+function fetchYearContext(info) {
+  var year = parseInt(info.year, 10);
+  if (!isFinite(year)) return Promise.resolve(null);
+  var songsJob = fetchYearSongs(info, year).then(function (list) {
+    if (list && list.length) info.yearSongs = list;
+  }).catch(function () { /* egal */ });
+  var eventsJob = loadYearEvents(year).then(function (pool) {
+    var picks = pickN(pool, 5);
+    if (picks.length) info.yearEvents = picks;
+  }).catch(function () { /* egal */ });
+  return Promise.all([songsJob, eventsJob]);
+}
+
+function fetchYearSongs(info, year) {
+  var offset = pickRandom([0, 40, 80]);
+  function search(off) {
+    return api('/search?type=track&limit=50&market=from_token&offset=' + off + '&q=' + encodeURIComponent('year:' + year))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { return (j && j.tracks && j.tracks.items) || []; });
+  }
+  return search(offset).then(function (items) {
+    if (!items.length && offset > 0) return search(0);
+    return items;
+  }).then(function (items) {
+    var ownArtists = info.artists.map(normalize);
+    var ownName = normalize(cleanTitle(info.name));
+    var pool = items.filter(function (t) {
+      if (t.id === info.id) return false;
+      if (normalize(cleanTitle(t.name)) === ownName) return false;
+      var a0 = normalize(t.artists && t.artists[0] && t.artists[0].name);
+      return ownArtists.indexOf(a0) === -1;
+    });
+    pool.sort(function (a, b) { return (b.popularity || 0) - (a.popularity || 0); });
+    var shuffled = pickN(pool.slice(0, 25), 25);
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < shuffled.length && out.length < 5; i++) {
+      var t = shuffled[i];
+      var a = t.artists && t.artists[0] && t.artists[0].name;
+      var key = normalize(a);
+      if (seen[key]) continue; /* pro Interpret nur ein Lied */
+      seen[key] = true;
+      out.push({ name: t.name, artist: a });
+    }
+    return out;
+  });
+}
+
+/* ============================================================
+   HINWEISE (3 pro Lied: 1× Song aus demselben Jahr,
+   2× historisches Ereignis desselben Jahres)
+   ============================================================ */
+function resetHints() {
+  state.hints = { list: null, idx: -1, promise: null };
+  hideHint();
+}
+
+function prepareHints(info) {
+  var year = parseInt(info.year, 10);
+  if (!isFinite(year)) { state.hints.promise = Promise.resolve([]); return state.hints.promise; }
+  if (state.hints.promise) return state.hints.promise;
+
+  state.hints.promise = Promise.all([
+    hintSameYearSong(info, year).catch(function () { return null; }),
+    loadYearEvents(year).catch(function () { return []; })
+  ]).then(function (res) {
+    var songHint = res[0];
+    var pool = res[1] || [];
+    /* Zusammensetzung pro Runde auslosen: mit 50 % Chance ist EIN
+       Lied-Hinweis dabei (höchstens einer, Position zufällig),
+       alle übrigen Plätze sind zufällige Ereignisse – es können
+       also auch drei Ereignisse sein. */
+    var useSong = Boolean(songHint) && Math.random() < 0.5;
+    var list = pickN(pool, useSong ? 2 : 3).map(function (ev) {
+      return 'Im selben Jahr \u2013 ' + ev;
+    });
+    if (useSong) {
+      var pos = Math.floor(Math.random() * (list.length + 1));
+      list.splice(pos, 0, songHint);
+    }
+    /* Fallback: gibt es keine Ereignisse, wenigstens den Lied-Hinweis zeigen */
+    if (!list.length && songHint) list = [songHint];
+    state.hints.list = list;
+    return list;
+  });
+  return state.hints.promise;
+}
+
+function hintSameYearSong(info, year) {
+  var offset = pickRandom([0, 40, 80, 120]);
+  function search(off) {
+    return api('/search?type=track&limit=50&market=from_token&offset=' + off + '&q=' + encodeURIComponent('year:' + year))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { return (j && j.tracks && j.tracks.items) || []; });
+  }
+  return search(offset).then(function (items) {
+    if (!items.length && offset > 0) return search(0);
+    return items;
+  }).then(function (items) {
+    var ownArtists = info.artists.map(normalize);
+    var pool = items.filter(function (t) {
+      if (t.id === info.id) return false;
+      var a0 = normalize(t.artists && t.artists[0] && t.artists[0].name);
+      if (ownArtists.indexOf(a0) !== -1) return false;
+      return true;
+    });
+    if (!pool.length) return null;
+    pool.sort(function (a, b) { return (b.popularity || 0) - (a.popularity || 0); });
+    var top = pool.slice(0, Math.min(15, pool.length));
+    var pick = pickRandom(top);
+    return 'Aus demselben Jahr stammt auch \u201e' + pick.name + '\u201c von ' + pick.artists[0].name + '.';
+  });
+}
+
+function cleanWikitext(s) {
+  var out = String(s || '');
+  out = out.replace(/<ref[^>]*\/>/g, '');
+  out = out.replace(/<ref[^>]*>[\s\S]*?<\/ref>/g, '');
+  for (var i = 0; i < 3; i++) out = out.replace(/\{\{[^{}]*\}\}/g, '');
+  out = out.replace(/\[\[[^\]|]*\|([^\]]+)\]\]/g, '$1');
+  out = out.replace(/\[\[([^\]]+)\]\]/g, '$1');
+  out = out.replace(/'{2,}/g, '');
+  out = out.replace(/<[^>]+>/g, '');
+  out = out.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+  out = out.replace(/\s+/g, ' ').trim();
+  return out;
+}
+
+function pickN(arr, n) {
+  if (!arr || !arr.length) return [];
+  var a = arr.slice();
+  var out = [];
+  while (a.length && out.length < n) {
+    var i = Math.floor(Math.random() * a.length);
+    out.push(a.splice(i, 1)[0]);
+  }
+  return out;
+}
+
+/* Liefert den (gecachten) Ereignis-Pool eines Jahres – die konkrete
+   Auswahl daraus wird bei jedem Aufruf neu zufällig gezogen. */
+function loadYearEvents(year) {
+  var lsKey = 'rikster_events_' + year;
+  var cached = null;
+  try { cached = JSON.parse(localStorage.getItem(lsKey) || 'null'); } catch (e) { cached = null; }
+  if (cached && cached.length) return Promise.resolve(cached);
+
+  var base = 'https://de.wikipedia.org/w/api.php?format=json&formatversion=2&origin=*&action=parse&page=' + year;
+  return fetchWithTimeout(base + '&prop=sections', 9000).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (j) {
+    var secs = (j && j.parse && j.parse.sections) || [];
+    var idx = null;
+    for (var i = 0; i < secs.length; i++) {
+      if (secs[i].line === 'Ereignisse' || secs[i].anchor === 'Ereignisse') { idx = secs[i].index; break; }
+    }
+    if (idx === null) throw new Error('keine Ereignisse');
+    return fetchWithTimeout(base + '&prop=wikitext&section=' + idx, 12000);
+  }).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (j) {
+    var wt = j && j.parse && j.parse.wikitext;
+    if (!wt) return [];
+    var lines = wt.split('\n');
+    var events = [];
+    var months = '(Januar|Februar|M\u00e4rz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)';
+    var dateRe = new RegExp('^\\d{1,2}\\.\\s?' + months + '\\s*:');
+    for (var i = 0; i < lines.length && events.length < 60; i++) {
+      var line = lines[i];
+      if (!/^\*+\s*/.test(line)) continue;
+      var clean = cleanWikitext(line.replace(/^\*+\s*/, ''));
+      if (!dateRe.test(clean)) continue;
+      if (clean.indexOf(String(year)) !== -1) continue; /* Jahr nicht verraten! */
+      if (clean.length < 30 || clean.length > 240) continue;
+      if (/[{}\[\]]/.test(clean)) continue;
+      events.push(clean);
+    }
+    try { if (events.length) localStorage.setItem(lsKey, JSON.stringify(events)); } catch (e) { /* egal */ }
+    return events;
+  });
+}
+
+function onHintButton() {
+  if (!state.assists) return;
+  var pop = $('#hintPop');
+  if (!state.hints.promise) {
+    /* Jahr evtl. noch nicht geladen */
+    if (state.trackInfo) {
+      prepareHints(state.trackInfo);
+    } else if (state.infoPromise) {
+      pop.hidden = false;
+      $('#hintLabel').textContent = 'Hinweis';
+      $('#hintText').textContent = 'Wird geladen \u2026';
+      state.infoPromise.then(function (info) {
+        if (!info) { hideHint(); toast('Gerade keine Hinweise verf\u00fcgbar'); return; }
+        prepareHints(info).then(function () { if (!pop.hidden) advanceHint(); });
+      });
+      return;
+    } else {
+      toast('Gerade keine Hinweise verf\u00fcgbar');
+      return;
+    }
+  }
+  if (state.hints.list) { advanceHint(); return; }
+  pop.hidden = false;
+  $('#hintLabel').textContent = 'Hinweis';
+  $('#hintText').textContent = 'Wird geladen \u2026';
+  state.hints.promise.then(function () {
+    if (!pop.hidden) advanceHint();
+  });
+}
+
+function advanceHint() {
+  var list = state.hints.list || [];
+  if (!list.length) {
+    hideHint();
+    toast('F\u00fcr dieses Lied sind gerade keine Hinweise verf\u00fcgbar');
+    return;
+  }
+  state.hints.idx = (state.hints.idx + 1) % list.length;
+  var pop = $('#hintPop');
+  pop.hidden = false;
+  $('#hintLabel').textContent = 'Hinweis ' + (state.hints.idx + 1) + '/' + list.length;
+  $('#hintText').textContent = list[state.hints.idx];
+}
+
+function hideHint() {
+  var pop = $('#hintPop');
+  if (pop) pop.hidden = true;
+}
+
 /* ============================================================
    QR-SCANNER
    ============================================================ */
@@ -480,17 +1177,9 @@ try {
   if ('BarcodeDetector' in window) detector = new BarcodeDetector({ formats: ['qr_code'] });
 } catch (e) { detector = null; }
 
-/* Die Karten aus dem Generator enthalten Spotify-Track-Links,
-   z. B. https://open.spotify.com/track/4PTG…?si=… – auch
-   spotify:track:… und intl-de-Links werden erkannt. */
-function parseTrackId(text) {
-  if (!text) return null;
-  var m = String(text).match(/(?:open\.spotify\.com\/(?:intl-[a-z]{2}(?:-[A-Za-z]{2})?\/)?track\/|spotify:track:)([A-Za-z0-9]{22})/i);
-  return m ? m[1] : null;
-}
-
 function startScanner() {
   hideReveal();
+  hideHint();
   showScreen('screen-scanner');
   state.scanning = true;
   var hint = $('#scanHint');
@@ -547,9 +1236,9 @@ function scanLoop(video) {
   var last = 0;
 
   function handleText(text) {
-    var id = parseTrackId(text);
-    if (id) { onScanned(id); return true; }
-    flashHint('Das ist kein Spotify-Code');
+    var scan = parseScan(text);
+    if (scan) { onScanned(scan); return true; }
+    flashHint('Das ist keine Hitster- oder Spotify-Karte');
     return false;
   }
 
@@ -573,7 +1262,6 @@ function scanLoop(video) {
           var sy = (video.videoHeight - size) / 2;
           ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
           var img = ctx.getImageData(0, 0, size, size);
-          /* attemptBoth: die Generator-Codes sind invertiert (weiß auf schwarz) */
           var code = window.jsQR(img.data, size, size, { inversionAttempts: 'attemptBoth' });
           if (code && code.data) handleText(code.data);
         }
@@ -587,28 +1275,82 @@ function scanLoop(video) {
 /* ============================================================
    SPIELFLUSS
    ============================================================ */
-function onScanned(trackId) {
+function onScanned(scan) {
+  if (state.gameMode === 'party' && window.partyOnScanned) { partyOnScanned(scan); return; }
   if (navigator.vibrate) navigator.vibrate(60);
   stopScanner();
+  showScreen('screen-player');
+  setVinylSpinning(true);
+  requestWakeLock();
 
+  if (scan.kind === 'spotify') {
+    startTrack(scan.id, null);
+    return;
+  }
+  /* Offizielle Hitster-Karte: erst zuordnen */
+  setPlayerStatus('Karte wird zugeordnet \u2026');
+  resolveHitsterCard(scan).then(function (r) {
+    startTrack(r.id, r.meta);
+  }).catch(function (err) {
+    handleResolveError(err, scan);
+  });
+}
+
+function startTrack(trackId, cardMeta) {
   state.currentTrackId = trackId;
+  state.cardMeta = cardMeta || null;
   state.trackInfo = null;
-  /* Infos schon im Hintergrund laden, damit die Auflösung sofort da ist */
-  state.infoPromise = fetchTrackInfo(trackId).then(function (info) {
+  resetHints();
+
+  state.infoPromise = fetchTrackInfo(trackId, state.cardMeta).then(function (info) {
     state.trackInfo = info;
+    if (state.assists) prepareHints(info);
     return info;
   }).catch(function () { return null; });
 
-  showScreen('screen-player');
   setPlayerStatus('Wird gestartet \u2026');
   setVinylSpinning(true);
-  requestWakeLock();
 
   playTrack(trackId).then(function () {
     state.playing = true;
     setPlayerStatus('L\u00e4uft');
     maskMediaSession();
   }).catch(handlePlayError);
+}
+
+function handleResolveError(err, scan) {
+  console.warn('resolve', err);
+  setVinylSpinning(false);
+  setPlayerStatus('Pausiert');
+  var code = err && err.code;
+  if (code === 'CARD_UNKNOWN' || code === 'CSV_MISSING') {
+    openModal({
+      title: 'Karte nicht in der Datenbank',
+      text: 'Diese Edition (\u201e' + scan.lang + '\u201c, Karte ' + scan.num + ') ist in der Community-Datenbank noch nicht erfasst. Deine selbst erstellten Karten funktionieren nat\u00fcrlich weiterhin.',
+      primary: 'Neue Karte',
+      onPrimary: goScan
+    });
+    return;
+  }
+  if (code === 'NO_MATCH') {
+    var meta = err.meta || {};
+    openModal({
+      title: 'Song nicht gefunden',
+      text: 'Die Karte wurde erkannt (' + (meta.artist || '?') + ' \u2013 \u201e' + (meta.title || '?') + '\u201c), aber bei Spotify wurde kein passender Song gefunden.',
+      primary: 'Neue Karte',
+      onPrimary: goScan
+    });
+    return;
+  }
+  if (err && err.message === 'not-logged-in') { showScreen('screen-auth'); return; }
+  openModal({
+    title: 'Zuordnung fehlgeschlagen',
+    text: 'Die Karten-Datenbank konnte nicht geladen werden. Pr\u00fcfe deine Internetverbindung.',
+    primary: 'Erneut versuchen',
+    onPrimary: function () { onScanned(scan); },
+    secondary: 'Neue Karte',
+    onSecondary: goScan
+  });
 }
 
 function handlePlayError(err) {
@@ -658,10 +1400,10 @@ function retryPlay() {
   }).catch(handlePlayError);
 }
 
-/* "Weiter": Lied stoppen und die nächste Karte scannen */
 function goScan() {
   stopPlayback();
   hideReveal();
+  hideHint();
   startScanner();
 }
 
@@ -693,7 +1435,9 @@ document.addEventListener('visibilitychange', function () {
 /* ============================================================
    AUFLÖSUNG
    ============================================================ */
-function showReveal() {
+function showReveal(force) {
+  if (!force && !state.assists) return;
+  hideHint();
   var sheet = $('#revealSheet');
   sheet.classList.add('open');
   sheet.setAttribute('aria-hidden', 'false');
@@ -702,6 +1446,11 @@ function showReveal() {
   p.then(function (info) {
     if (!sheet.classList.contains('open')) return;
     renderReveal(info);
+    if (info && info.extras) {
+      info.extras.then(function () {
+        if (sheet.classList.contains('open')) renderReveal(info);
+      });
+    }
   });
 }
 
@@ -717,12 +1466,15 @@ function renderRevealLoading() {
   $('#revTitle').textContent = '\u00a0';
   $('#revCover').hidden = true;
   $('#revChips').innerHTML = '';
+  $('#revSong').hidden = true;
+  $('#revYearSongs').hidden = true;
+  $('#revYearEvents').hidden = true;
   $('#revWiki').hidden = true;
   $('#revError').hidden = true;
 }
 
 function addChip(container, label, value, wide) {
-  if (value === undefined || value === null || value === '' ) return;
+  if (value === undefined || value === null || value === '') return;
   var chip = document.createElement('div');
   chip.className = wide ? 'chip wide' : 'chip';
   var k = document.createElement('span');
@@ -763,11 +1515,58 @@ function renderReveal(info) {
   addChip(chips, 'Album', info.album);
   addChip(chips, 'Erschienen', formatRelease(info.release, info.precision));
   addChip(chips, 'L\u00e4nge', info.duration ? formatDuration(info.duration) : null);
+  addChip(chips, 'Herkunftsland', info.country);
+  addChip(chips, 'Sprache', info.language);
+  addChip(chips, 'H\u00f6chste Chartplatzierung', info.chartPeak ? ('Nr. ' + info.chartPeak.pos + ' (' + info.chartPeak.region + ')') : null);
+  addChip(chips, 'Wochen in den Charts', info.chartWeeks ? (info.chartWeeks.n + ' (' + info.chartWeeks.region + ')') : null);
+  addChip(chips, 'Auszeichnungen', info.awards, true);
+  addChip(chips, 'Verk\u00e4ufe', info.sales ? (info.sales + ' Einheiten') : null);
   addChip(chips, 'Spotify-Beliebtheit', (typeof info.popularity === 'number') ? info.popularity + ' / 100' : null);
   addChip(chips, 'Label', info.label);
   addChip(chips, 'Follower (Interpret)', info.followers ? formatNumber(info.followers) : null);
   if (info.genres && info.genres.length) {
-    addChip(chips, 'Genres', info.genres.slice(0, 3).join(', '), true);
+    addChip(chips, 'Musikgenre', info.genres.slice(0, 3).join(', '), true);
+  }
+
+  var songBox = $('#revSong');
+  if (info.songfact && info.songfact.text) {
+    var noteTxt = info.songfact.translated ? '' : ' (Original auf Englisch)';
+    $('#songfactText').textContent = info.songfact.text + noteTxt;
+    var sl = $('#songfactLink');
+    sl.href = info.songfact.url;
+    songBox.hidden = false;
+  } else {
+    songBox.hidden = true;
+  }
+
+  var ysBox = $('#revYearSongs');
+  if (info.yearSongs && info.yearSongs.length) {
+    $('#yearSongsTitle').textContent = 'Weitere Lieder aus ' + info.year;
+    var ysList = $('#yearSongsList');
+    ysList.innerHTML = '';
+    info.yearSongs.forEach(function (s) {
+      var li = document.createElement('li');
+      li.textContent = '\u201e' + s.name + '\u201c \u2013 ' + s.artist;
+      ysList.appendChild(li);
+    });
+    ysBox.hidden = false;
+  } else {
+    ysBox.hidden = true;
+  }
+
+  var yeBox = $('#revYearEvents');
+  if (info.yearEvents && info.yearEvents.length) {
+    $('#yearEventsTitle').textContent = 'Das geschah ' + info.year;
+    var yeList = $('#yearEventsList');
+    yeList.innerHTML = '';
+    info.yearEvents.forEach(function (ev) {
+      var li = document.createElement('li');
+      li.textContent = ev;
+      yeList.appendChild(li);
+    });
+    yeBox.hidden = false;
+  } else {
+    yeBox.hidden = true;
   }
 
   var wikiBox = $('#revWiki');
@@ -779,6 +1578,20 @@ function renderReveal(info) {
     wikiBox.hidden = false;
   } else {
     wikiBox.hidden = true;
+  }
+}
+
+/* ============================================================
+   EINSTELLUNG: Hinweise & Auflösung an/aus
+   ============================================================ */
+function applyAssists(on, save) {
+  state.assists = on;
+  document.body.classList.toggle('assists-off', !on);
+  var sw = $('#toggleAssists');
+  if (sw) sw.setAttribute('aria-checked', on ? 'true' : 'false');
+  if (!on) { hideReveal(); hideHint(); }
+  if (save) {
+    try { localStorage.setItem(LS.assists, on ? '1' : '0'); } catch (e) { /* egal */ }
   }
 }
 
@@ -807,6 +1620,7 @@ function registerSW() {
 
 function boot() {
   registerSW();
+  applyAssists(localStorage.getItem(LS.assists) !== '0', false);
 
   if (!CLIENT_ID || CLIENT_ID.indexOf('HIER') !== -1) {
     $('#setupRedirect').textContent = REDIRECT_URI;
@@ -834,7 +1648,7 @@ function boot() {
     if (!isLoggedIn()) { showScreen('screen-auth'); return; }
     showScreen('screen-home');
     hydrateProfile();
-    initPlayback(); /* Modus schon mal im Hintergrund ermitteln */
+    initPlayback();
   });
 }
 
@@ -845,20 +1659,30 @@ function bindEvents() {
     logout();
   });
   $('#btnPlay').addEventListener('click', function () {
-    activateAudio();      /* Nutzer-Geste für Audio nutzen */
+    activateAudio();
     initPlayback();
-    startScanner();
+    if (window.openModeScreen) { openModeScreen(); } else { startScanner(); }
   });
   $('#btnCancelScan').addEventListener('click', function () {
     stopScanner();
-    showScreen('screen-home');
+    if (state.gameMode === 'party' && window.partyGoHub) { partyGoHub(); }
+    else { showScreen('screen-home'); }
   });
   $('#btnWeiter').addEventListener('click', function () {
     activateAudio();
+    if (state.gameMode === 'party' && window.partyOnWeiter) { partyOnWeiter(); return; }
     goScan();
   });
-  $('#btnReveal').addEventListener('click', showReveal);
-  $('#btnBack').addEventListener('click', hideReveal);
+  $('#btnReveal').addEventListener('click', function () { showReveal(false); });
+  $('#btnBack').addEventListener('click', function () {
+    if (state.gameMode === 'party' && window.partyOnRevealBack) { partyOnRevealBack(); return; }
+    hideReveal();
+  });
+  $('#btnHint').addEventListener('click', onHintButton);
+  $('#btnHintClose').addEventListener('click', hideHint);
+  $('#toggleAssists').addEventListener('click', function () {
+    applyAssists(!state.assists, true);
+  });
 }
 
 document.addEventListener('DOMContentLoaded', function () {

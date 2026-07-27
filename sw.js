@@ -1,9 +1,9 @@
-/* Rikster Service Worker – v2
+/* Rikster Service Worker – v4
    Strategie:
    - Seitenaufrufe & veränderliche Dateien (config.js, app.js, CSS …):
      erst Netz, Cache nur als Fallback → Änderungen kommen sofort an.
    - Große, unveränderliche Dateien (jsQR.js, Icons): erst Cache. */
-const CACHE = 'rikster-v2';
+const CACHE = 'rikster-v4';
 const ASSETS = [
   './',
   'index.html',
@@ -11,6 +11,7 @@ const ASSETS = [
   'manifest.webmanifest',
   'css/style.css',
   'js/app.js',
+  'js/party.js',
   'js/jsQR.js',
   'logo.svg',
   'icons/icon-192.png',

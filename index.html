@@ -77,6 +77,10 @@
       <h1 class="wordmark"><span class="mark-r">R</span>IKSTER</h1>
       <p class="tagline">Scannen. Hören. Raten.</p>
       <button class="btn btn-amber btn-big" id="btnPlay">Spielen</button>
+      <div class="switch-row">
+        <span class="switch-label">Hinweise &amp; Auflösung</span>
+        <button class="switch" id="toggleAssists" role="switch" aria-checked="true" aria-label="Hinweise und Auflösung an/aus"><span class="knob"></span></button>
+      </div>
       <a class="cardlink" href="https://hitster-card-generator.streamlit.app/" target="_blank" rel="noopener">Karten erstellen&nbsp;↗</a>
     </div>
     <footer class="home-footer">
@@ -88,7 +92,6 @@
   <!-- ================= SCANNER ================= -->
   <section class="screen screen-scanner" id="screen-scanner">
     <video id="camVideo" playsinline muted></video>
-    <div class="scan-vignette"></div>
     <div class="scan-frame">
       <span class="c c-tl"></span><span class="c c-tr"></span>
       <span class="c c-bl"></span><span class="c c-br"></span>
@@ -107,13 +110,94 @@
       <span></span><span></span><span></span><span></span><span></span>
     </div>
     <p class="player-status" id="playerStatus">Wird gestartet …</p>
-    <div class="player-actions">
+    <div class="player-actions" id="playerActions">
+      <button class="btn btn-hint" id="btnHint">Hinweis</button>
       <button class="btn btn-ghost" id="btnWeiter">Weiter</button>
       <button class="btn btn-amber" id="btnReveal">Auflösung</button>
     </div>
+
+    <!-- Hinweis-Banner (erscheint oben, verdeckt keine Buttons) -->
+    <div class="hint-pop" id="hintPop" hidden>
+      <div class="hint-head">
+        <span id="hintLabel"></span>
+        <button class="hint-close" id="btnHintClose" aria-label="Hinweis schließen">✕</button>
+      </div>
+      <p id="hintText"></p>
+    </div>
+    <button class="linkbtn skip-link" id="btnSkipSong">Song überspringen (1 Chip)</button>
   </section>
 
   <!-- ================= AUFLÖSUNG (Sheet) ================= -->
+  <!-- ================= MODUS-WAHL ================= -->
+  <section class="screen" id="screen-mode">
+    <div class="mode-wrap">
+      <h2 class="mode-title">Wie wollt ihr spielen?</h2>
+      <button class="btn btn-amber btn-block" id="btnModeNormal">Normal</button>
+      <p class="mode-desc">Einfach scannen, hören, raten – ohne Punktezählung.</p>
+      <button class="btn btn-ghost btn-block btn-party" id="btnModeParty">Party</button>
+      <p class="mode-desc">Mit Spielern, Zeitleisten, automatischer Auswertung und Platzierungen.</p>
+      <button class="btn btn-ghost btn-block" id="btnModeResume" hidden>Party fortsetzen</button>
+      <button class="linkbtn" id="btnModeBack">Zurück</button>
+    </div>
+  </section>
+
+  <!-- ================= PARTY-SETUP ================= -->
+  <section class="screen" id="screen-party-setup">
+    <div class="setup-wrap">
+      <h2 class="mode-title">Party einrichten</h2>
+      <p class="setup-label">Spieler &amp; Reihenfolge</p>
+      <div class="setup-list" id="setupPlayers"></div>
+      <button class="btn btn-ghost btn-block" id="btnAddPlayer">+ Spieler hinzufügen</button>
+      <p class="setup-label">Karten zum Sieg</p>
+      <div class="stepper">
+        <button class="mini-btn" id="btnTargetMinus" aria-label="Weniger Karten">−</button>
+        <span class="stepper-val" id="targetVal">10</span>
+        <button class="mini-btn" id="btnTargetPlus" aria-label="Mehr Karten">+</button>
+      </div>
+      <button class="btn btn-amber btn-block" id="btnPartyStart">Los geht's</button>
+      <button class="linkbtn" id="btnSetupBack">Zurück</button>
+    </div>
+  </section>
+
+  <!-- ================= PARTY: ZUG-ÜBERSICHT ================= -->
+  <section class="screen" id="screen-party-turn">
+    <div class="turn-wrap">
+      <div class="turn-badge" id="turnBadge"></div>
+      <h2 class="turn-name" id="turnName"></h2>
+      <p class="turn-progress" id="turnProgress"></p>
+      <div class="tl-strip" id="turnTimeline"></div>
+      <div class="turn-actions">
+        <button class="btn btn-amber" id="btnTurnScan">Karte scannen</button>
+        <button class="btn btn-ghost" id="btnTurnBuy">Karte kaufen</button>
+        <button class="btn btn-ghost" id="btnTurnNext">Nächster Spieler</button>
+        <button class="btn btn-ghost" id="btnTurnStats">Statistik</button>
+      </div>
+      <p class="setup-label">Alle Spieler</p>
+      <div class="stand-list" id="standList"></div>
+      <button class="linkbtn" id="btnPartyExit">Party verlassen</button>
+    </div>
+  </section>
+
+  <!-- ================= PARTY: EINORDNEN ================= -->
+  <section class="screen" id="screen-party-place">
+    <div class="place-wrap">
+      <h2 class="mode-title">Wo gehört die Karte hin?</h2>
+      <p class="mode-desc">Tippe auf ein +, um die Karte dort einzuordnen. Gleiche Jahre zählen davor und dahinter als richtig.</p>
+      <div class="place-strip" id="placeStrip"></div>
+      <button class="linkbtn" id="btnPlaceCancel">Zurück zum Song</button>
+    </div>
+  </section>
+
+  <!-- ================= PARTY: ENDSTAND ================= -->
+  <section class="screen" id="screen-party-end">
+    <div class="end-wrap">
+      <h2 class="mode-title">Endstand</h2>
+      <div class="end-list" id="endList"></div>
+      <button class="btn btn-amber btn-block" id="btnPartyAgain">Nochmal mit gleichen Spielern</button>
+      <button class="btn btn-ghost btn-block" id="btnPartyHome">Zum Menü</button>
+    </div>
+  </section>
+
   <div class="sheet" id="revealSheet" aria-hidden="true">
     <div class="sheet-scroll">
       <div class="hitster-card">
@@ -123,6 +207,19 @@
       </div>
       <img class="cover" id="revCover" alt="Albumcover" hidden>
       <div class="chips" id="revChips"></div>
+      <div class="wiki" id="revSong" hidden>
+        <h3>Über den Song</h3>
+        <p id="songfactText"></p>
+        <a id="songfactLink" href="#" target="_blank" rel="noopener">Quelle: Songfacts&nbsp;↗</a>
+      </div>
+      <div class="wiki" id="revYearSongs" hidden>
+        <h3 id="yearSongsTitle"></h3>
+        <ul class="wiki-list" id="yearSongsList"></ul>
+      </div>
+      <div class="wiki" id="revYearEvents" hidden>
+        <h3 id="yearEventsTitle"></h3>
+        <ul class="wiki-list" id="yearEventsList"></ul>
+      </div>
       <div class="wiki" id="revWiki" hidden>
         <h3 id="wikiTitle"></h3>
         <p id="wikiText"></p>
@@ -133,6 +230,43 @@
     <div class="sheet-footer">
       <button class="btn btn-ghost btn-wide" id="btnBack">Zurück</button>
     </div>
+  </div>
+
+  <!-- ================= PARTY: ERGEBNIS ================= -->
+  <div class="sheet party-sheet" id="partySheet" aria-hidden="true">
+    <div class="sheet-scroll">
+      <div class="pr-badge" id="prBadge"></div>
+      <div class="hitster-card">
+        <div class="hc-artist" id="prArtist">&nbsp;</div>
+        <div class="hc-year" id="prYear">&nbsp;</div>
+        <div class="hc-title" id="prTitle">&nbsp;</div>
+      </div>
+      <p class="pr-text" id="prText"></p>
+      <div class="pr-actions" id="prActions"></div>
+    </div>
+  </div>
+
+  <!-- ================= PARTY: STATISTIK ================= -->
+  <div class="sheet" id="statsSheet" aria-hidden="true">
+    <div class="sheet-scroll">
+      <h2 class="stats-title" id="statsName"></h2>
+      <div class="stats-list" id="statsList"></div>
+    </div>
+    <div class="sheet-footer">
+      <button class="btn btn-ghost" id="btnStatsClose">Schließen</button>
+    </div>
+  </div>
+
+  <!-- ================= PARTY: PLATZIERUNG ================= -->
+  <div class="win-pop" id="winPop" hidden>
+    <span class="win-float f1">🎉</span>
+    <span class="win-float f2">🎵</span>
+    <span class="win-float f3">✨</span>
+    <span class="win-float f4">🎊</span>
+    <div class="win-medal" id="winMedal"></div>
+    <div class="win-place" id="winPlace"></div>
+    <div class="win-name" id="winName"></div>
+    <button class="btn btn-amber" id="btnWinClose">Weiter</button>
   </div>
 
   <!-- ================= MODAL & TOAST ================= -->
@@ -151,5 +285,6 @@
   <script src="config.js"></script>
   <script src="js/jsQR.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/party.js"></script>
 </body>
 </html>
