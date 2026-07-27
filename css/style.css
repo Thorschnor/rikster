@@ -197,6 +197,14 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; background
   transition: color .2s ease, border-color .2s ease;
 }
 .scan-hint.warn { color: var(--yellow); border-color: var(--yellow); }
+.scan-reset {
+  position: absolute; left: 50%; bottom: calc(var(--sab) + 88px);
+  transform: translateX(-50%); z-index: 3;
+  background: rgba(11,14,20,.78); border: 1px solid var(--line);
+  color: var(--muted); padding: 9px 16px; border-radius: 999px;
+  font-size: 13px; white-space: nowrap;
+}
+.scan-reset:active { color: var(--amber); border-color: var(--amber); }
 
 /* ---------- Player ---------- */
 .vinyl { position: relative; width: min(72vw, 330px); height: min(72vw, 330px); }
@@ -360,7 +368,7 @@ body.assists-off .player-actions { grid-template-columns: 1fr; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* ---------- Barrierefreiheit ---------- */
-.btn:focus-visible, .linkbtn:focus-visible, .scan-cancel:focus-visible, .cardlink:focus-visible,
+.btn:focus-visible, .linkbtn:focus-visible, .scan-cancel:focus-visible, .cardlink:focus-visible, .scan-reset:focus-visible,
 .switch:focus-visible, .hint-close:focus-visible {
   outline: 3px solid var(--blue); outline-offset: 3px;
 }

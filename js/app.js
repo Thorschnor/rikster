@@ -30,7 +30,8 @@ var API_BASE = 'https://api.spotify.com/v1';
 var HITSTER_DB = 'https://raw.githubusercontent.com/andygruber/songseeker-hitster-playlists/main/';
 var CORS_PROXIES = [
   'https://api.allorigins.win/raw?url=',
-  'https://corsproxy.io/?url='
+  'https://corsproxy.io/?url=',
+  'https://api.codetabs.com/v1/proxy/?quest='
 ];
 var LS = {
   access: 'rikster_access',
@@ -769,9 +770,10 @@ function fetchExtras(info) {
     }).catch(function () { /* egal */ }));
   }
 
-  /* Deutsche Wikipedia (Song-Artikel): Charts, Auszeichnungen, Verkäufe
+  /* Wikipedia (Song-Artikel): Charts, Auszeichnungen, Verkäufe
      + Wikidata: Sprache des Songs */
-  jobs.push(fetchSongArticleData(info).catch(function () { /* egal */ }));
+  info._articleJob = fetchSongArticleData(info).catch(function () { /* egal */ });
+  jobs.push(info._articleJob);
 
   /* Jahres-Kontext: 5 weitere Lieder + 5 Ereignisse desselben Jahres */
   jobs.push(fetchYearContext(info).catch(function () { /* egal */ }));
@@ -823,139 +825,267 @@ function fetchArtistCountry(artistName) {
   });
 }
 
-/* ---------- Deutsche Wikipedia: Song-Artikel finden & auswerten ---------- */
-function findDeSongArticle(info) {
-  var q = '"' + cleanTitle(info.name) + '" ' + info.artists[0];
-  var url = 'https://de.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=5&srsearch=' +
-    encodeURIComponent(q);
-  return fetchWithTimeout(url, 9000).then(function (r) {
-    return r.ok ? r.json() : null;
-  }).then(function (j) {
-    var hits = (j && j.query && j.query.search) || [];
-    var nt = normalize(cleanTitle(info.name));
-    var best = null;
-    for (var i = 0; i < hits.length; i++) {
-      var ti = hits[i].title;
-      var n = normalize(ti);
-      if (n.indexOf(nt) === -1) continue;
-      /* Lied-Artikel bevorzugen, Alben/Interpreten-Seiten meiden */
-      if (/\((.*lied.*|.*song.*)\)/i.test(ti)) return ti;
-      if (!best && n !== normalize(info.artists[0])) best = ti;
-    }
-    return best;
-  });
+/* ---------- Wikipedia: Song-Artikel finden & auswerten ----------
+   Wichtig: Die Chart-Tabellen der deutschen Wikipedia bestehen aus
+   Vorlagen, deren Zellen beim Rendern praktisch leer bleiben (Flaggen
+   statt Text) - auslesen laesst sich das nur aus dem Fliesstext.
+   Zusaetzlich werten wir den englischen Artikel aus, dessen Tabellen
+   echte Textzellen haben. Beide Quellen werden zusammengefuehrt. */
+
+var DE_NUM = {
+  'ein': 1, 'eine': 1, 'eins': 1, 'zwei': 2, 'drei': 3, 'vier': 4,
+  'f\u00fcnf': 5, 'sechs': 6, 'sieben': 7, 'acht': 8, 'neun': 9, 'zehn': 10,
+  'elf': 11, 'zw\u00f6lf': 12, 'dreizehn': 13, 'vierzehn': 14, 'f\u00fcnfzehn': 15,
+  'sechzehn': 16, 'siebzehn': 17, 'achtzehn': 18, 'neunzehn': 19, 'zwanzig': 20
+};
+function deWordNum(w) {
+  if (!w) return null;
+  var s = String(w).trim();
+  if (/^\d{1,3}$/.test(s)) return parseInt(s, 10);
+  var n = DE_NUM[s.toLowerCase()];
+  return (n === undefined) ? null : n;
 }
 
-function fetchSongArticleData(info) {
-  return findDeSongArticle(info).then(function (title) {
-    var qidJob = null;
-    if (title) {
-      qidJob = fetch('https://de.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title.replace(/ /g, '_')))
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (j) { return j && j.wikibase_item; })
-        .catch(function () { return null; });
-    } else {
-      qidJob = findSongQidViaEnwiki(info);
+var DE_REGIONS = [
+  { re: /Deutschland|deutschen (Single)?charts|deutschen Charts/i, code: 'DE' },
+  { re: /\u00d6sterreich|\u00f6sterreichischen/i, code: 'AT' },
+  { re: /Schweiz|Schweizer Hitparade/i, code: 'CH' },
+  { re: /Vereinigten K\u00f6nigreich|britischen|Gro\u00dfbritannien/i, code: 'UK' },
+  { re: /Vereinigten Staaten|US-amerikanischen|Billboard/i, code: 'US' }
+];
+var EN_REGIONS = [
+  { re: /^Germany\b/i, code: 'DE' },
+  { re: /^Austria\b/i, code: 'AT' },
+  { re: /^Switzerland\b/i, code: 'CH' },
+  { re: /^UK\b|^United Kingdom\b/i, code: 'UK' },
+  { re: /^US\b|^United States\b/i, code: 'US' }
+];
+
+/* Zahl aus deutschen Verkaufsangaben: "1,15 Millionen" / "300.000" / "eine Million" */
+function deSalesNum(numStr, unit) {
+  if (!numStr) return null;
+  var s = String(numStr).trim();
+  var n;
+  if (/^\d{1,3}(\.\d{3})+$/.test(s)) n = parseInt(s.replace(/\./g, ''), 10);
+  else n = parseFloat(s.replace(/\./g, '').replace(',', '.'));
+  if (!isFinite(n)) return null;
+  if (unit && /Million/i.test(unit)) n = n * 1000000;
+  if (n < 1000) return null;
+  return Math.round(n);
+}
+
+/* Ergebnisse aus mehreren Quellen zusammenfuehren */
+function mergeChartData(info, charts, awards, sales) {
+  (charts || []).forEach(function (c) {
+    if (c.peak !== null && c.peak !== undefined && c.peak >= 1 && c.peak <= 150) {
+      if (!info.chartPeak || c.peak < info.chartPeak.pos) info.chartPeak = { pos: c.peak, region: c.region };
     }
-
-    var htmlJob = title
-      ? fetchWithTimeout('https://de.wikipedia.org/api/rest_v1/page/html/' + encodeURIComponent(title.replace(/ /g, '_')), 12000)
-          .then(function (r) { return r.ok ? r.text() : null; })
-          .catch(function () { return null; })
-      : Promise.resolve(null);
-
-    return Promise.all([htmlJob, qidJob]).then(function (res) {
-      var html = res[0], qid = res[1];
-      if (html) {
-        try { parseDeSongHtml(html, info); } catch (e) { /* egal */ }
-      }
-      if (qid) return applyWikidata(qid, info);
-      return null;
+    if (c.weeks && c.weeks >= 1 && c.weeks <= 900) {
+      var better = !info.chartWeeks ||
+        (c.region === 'DE' && info.chartWeeks.region !== 'DE') ||
+        (c.region === info.chartWeeks.region && c.weeks > info.chartWeeks.n);
+      if (better) info.chartWeeks = { n: c.weeks, region: c.region };
+    }
+  });
+  if (awards) {
+    if (!info._aw) info._aw = { Gold: 0, Platin: 0, Diamant: 0 };
+    ['Gold', 'Platin', 'Diamant'].forEach(function (k) {
+      if (awards[k] > info._aw[k]) info._aw[k] = awards[k];
     });
-  });
+    var parts = [];
+    ['Diamant', 'Platin', 'Gold'].forEach(function (k) {
+      if (info._aw[k] > 0) parts.push(info._aw[k] + '\u00d7 ' + k);
+    });
+    if (parts.length) info.awards = parts.join(' \u00b7 ');
+  }
+  if (sales && (!info._sales || sales > info._sales)) {
+    info._sales = sales;
+    info.sales = formatNumber(sales);
+  }
 }
 
-function parseDeSongHtml(html, info) {
-  var doc = new DOMParser().parseFromString(html, 'text/html');
-  var artistOk = normalize(doc.body.textContent).indexOf(normalize(info.artists[0])) !== -1;
-  if (!artistOk) return; /* falscher Artikel – lieber nichts anzeigen */
+/* ---- Deutscher Artikel: Fliesstext auswerten ---- */
+function parseDeSongText(text, info) {
+  if (!text) return;
+  var art = normalize(mainArtist(info.artists[0]));
+  if (art && normalize(text).indexOf(art) === -1) return; /* falscher Artikel */
 
-  /* Chartplatzierungen: Tabellenzeilen wie  DE | 4 | … (26 Wo.) */
-  var rows = doc.querySelectorAll('tr');
   var charts = [];
+  var lastReg = null;
+  var parts = text.split(/(?:\.|\n)\s+/);
+  parts.forEach(function (s) {
+    if (/Jahrescharts|Jahreshitparade|Dekaden|Jahrgangs/i.test(s)) return; /* keine Wochencharts */
+    var reg = null;
+    for (var i = 0; i < DE_REGIONS.length; i++) {
+      if (DE_REGIONS[i].re.test(s)) { reg = DE_REGIONS[i].code; break; }
+    }
+    if (reg) lastReg = reg; else reg = lastReg;
+    if (!reg) return;
+
+    var peak = null;
+    if (/Chartspitze|Nummer[- ]eins|Spitzenposition|H\u00f6chstposition erreich/i.test(s)) peak = 1;
+    var m = s.match(/(?:Rang|Platz|Position)\s+([A-Za-z\u00e4\u00f6\u00fc]+|\d{1,3})/i);
+    if (m) {
+      var n = deWordNum(m[1]);
+      if (n !== null) peak = (peak === null) ? n : Math.min(peak, n);
+    }
+    var w = s.match(/(\d{1,3})\s*Wochen\s+in\s+(?:den|der)\s+(?:Singlecharts|Charts|Hitparade)/i);
+    var weeks = w ? parseInt(w[1], 10) : null;
+    if (peak !== null || weeks !== null) charts.push({ region: reg, peak: peak, weeks: weeks });
+  });
+
+  /* Auszeichnungen */
+  var aw = { Gold: 0, Platin: 0, Diamant: 0 };
+  function bump(kind, n) {
+    var k = /Diamant/i.test(kind) ? 'Diamant' : (/Platin/i.test(kind) ? 'Platin' : 'Gold');
+    if (n > aw[k]) aw[k] = n;
+  }
+  var re1 = /(\d{1,2})[\s-]?fach[\s-]?(Gold|Platin|Diamant)/gi, mm;
+  while ((mm = re1.exec(text)) !== null) bump(mm[2], parseInt(mm[1], 10));
+  var re2 = /([A-Za-z\u00e4\u00f6\u00fc]+|\d{1,2})\s*[Mm]al\s+mit\s+(Gold|Platin|Diamant)/g;
+  while ((mm = re2.exec(text)) !== null) {
+    var n2 = deWordNum(mm[1]);
+    if (n2) bump(mm[2], n2);
+  }
+  var re3 = /einmal\s+mit\s+(Gold|Platin|Diamant)/gi;
+  while ((mm = re3.exec(text)) !== null) bump(mm[1], 1);
+  var re4 = /(Goldene[nr]?|Platin|Diamantene[nr]?)[\s-]?Schallplatte/gi;
+  while ((mm = re4.exec(text)) !== null) bump(mm[1], 1);
+
+  /* Verkaufszahlen */
+  var sales = null;
+  var s1 = text.match(/verkaufte sich (?:mehr als |\u00fcber )?([\d.,]+)\s*(Millionen|Million)?\s*(?:Mal|mal)/i);
+  if (s1) sales = deSalesNum(s1[1], s1[2]);
+  if (!sales && /verkaufte sich (?:mehr als |\u00fcber )?eine Million/i.test(text)) sales = 1000000;
+  var s2 = text.match(/f\u00fcr (?:\u00fcber |mehr als )?([\d.,]+)\s*(Millionen|Million)?\s*verkaufte[nr]? Einheiten/i);
+  if (s2) {
+    var v2 = deSalesNum(s2[1], s2[2]);
+    if (v2 && (!sales || v2 > sales)) sales = v2;
+  }
+  if (!sales && /f\u00fcr (?:\u00fcber |mehr als )?eine Million verkaufte[nr]? Einheiten/i.test(text)) sales = 1000000;
+
+  mergeChartData(info, charts, aw, sales);
+}
+
+/* ---- Englischer Artikel: Tabellen auswerten ---- */
+function parseEnSongHtml(html, info) {
+  if (!html) return;
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  var body = doc.body ? doc.body.textContent : '';
+  var art = normalize(mainArtist(info.artists[0]));
+  if (art && normalize(body).indexOf(art) === -1) return;
+
+  var charts = [], aw = { Gold: 0, Platin: 0, Diamant: 0 }, sales = null;
+  var rows = doc.querySelectorAll('tr');
   for (var i = 0; i < rows.length; i++) {
     var cells = rows[i].querySelectorAll('td,th');
     if (cells.length < 2) continue;
     var c0 = (cells[0].textContent || '').trim();
-    var cm = c0.match(/^([A-Z]{2})\b/);
-    if (!cm || ['DE', 'AT', 'CH', 'UK', 'US'].indexOf(cm[1]) === -1) continue;
-    var rowText = rows[i].textContent || '';
-    var peak = null;
-    for (var k = 1; k < cells.length; k++) {
-      var pm = (cells[k].textContent || '').trim().match(/^(\d{1,3})\b/);
-      if (pm) { peak = parseInt(pm[1], 10); break; }
+    var reg = null;
+    for (var r = 0; r < EN_REGIONS.length; r++) {
+      if (EN_REGIONS[r].re.test(c0)) { reg = EN_REGIONS[r].code; break; }
     }
-    if (peak === null || peak < 1 || peak > 150) continue;
-    var wm = rowText.match(/(\d{1,3})\s*Wo/);
-    charts.push({ region: cm[1], peak: peak, weeks: wm ? parseInt(wm[1], 10) : null });
+    if (!reg) continue;
+    var c1 = (cells[1].textContent || '').replace(/\[[^\]]*\]/g, '').trim();
+    var cert = c1.match(/^(?:(\d{1,2})\s*[\u00d7x]\s*)?(Gold|Platinum|Diamond)\b/i);
+    if (cert) {
+      var kind = /Diamond/i.test(cert[2]) ? 'Diamant' : (/Platinum/i.test(cert[2]) ? 'Platin' : 'Gold');
+      var cnt = cert[1] ? parseInt(cert[1], 10) : 1;
+      if (cnt > aw[kind]) aw[kind] = cnt;
+      if (cells.length > 2) {
+        var sTxt = (cells[2].textContent || '').replace(/[^\d,\.]/g, '');
+        var sNum = parseInt(sTxt.replace(/[.,]/g, ''), 10);
+        if (isFinite(sNum) && sNum > 1000 && (!sales || sNum > sales)) sales = sNum;
+      }
+      continue;
+    }
+    var pm = c1.match(/^(\d{1,3})\b/);
+    if (pm) charts.push({ region: reg, peak: parseInt(pm[1], 10), weeks: null });
   }
-  if (charts.length) {
-    var best = charts[0];
-    for (var b = 1; b < charts.length; b++) { if (charts[b].peak < best.peak) best = charts[b]; }
-    info.chartPeak = { pos: best.peak, region: best.region };
-    var de = null;
-    for (var d = 0; d < charts.length; d++) { if (charts[d].region === 'DE' && charts[d].weeks) { de = charts[d]; break; } }
-    var wsrc = de || (best.weeks ? best : null);
-    if (!wsrc) {
-      for (var w = 0; w < charts.length; w++) { if (charts[w].weeks) { wsrc = charts[w]; break; } }
-    }
-    if (wsrc && wsrc.weeks) info.chartWeeks = { n: wsrc.weeks, region: wsrc.region };
-  }
-
-  /* Auszeichnungen für Musikverkäufe + Verkaufszahlen */
-  var tables = doc.querySelectorAll('table');
-  for (var t = 0; t < tables.length; t++) {
-    var txt = tables[t].textContent || '';
-    if (txt.indexOf('Auszeichnungen f\u00fcr Musikverk\u00e4ufe') === -1) continue;
-    var totals = { Gold: 0, Platin: 0, Diamant: 0 };
-    var re = /(?:(\d+)\s*[\u00d7x]\s*)?\b(Gold|Platin|Diamant)\b/g;
-    var mm;
-    while ((mm = re.exec(txt)) !== null) {
-      totals[mm[2]] += mm[1] ? parseInt(mm[1], 10) : 1;
-    }
-    var parts = [];
-    ['Diamant', 'Platin', 'Gold'].forEach(function (k) {
-      if (totals[k] > 0) parts.push(totals[k] + '\u00d7 ' + k);
-    });
-    if (parts.length) info.awards = parts.join(' \u00b7 ');
-    var sm = txt.match(/Insgesamt[^0-9]{0,40}([\d.][\d.\s]*\d)/);
-    if (sm) {
-      var salesNum = parseInt(sm[1].replace(/[^\d]/g, ''), 10);
-      if (isFinite(salesNum) && salesNum > 1000) info.sales = formatNumber(salesNum);
-    }
-    break;
-  }
+  mergeChartData(info, charts, aw, sales);
 }
 
-function findSongQidViaEnwiki(info) {
-  var q = '"' + cleanTitle(info.name) + '" ' + info.artists[0] + ' song';
-  var url = 'https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=3&srsearch=' +
+/* ---- Artikelsuche ---- */
+function findWikiArticle(lang, info) {
+  var title = cleanTitle(info.name);
+  var art = mainArtist(info.artists[0]);
+  var q = '"' + title.replace(/"/g, '') + '" ' + art + (lang === 'de' ? ' Lied' : ' song');
+  var url = 'https://' + lang + '.wikipedia.org/w/api.php?action=query&list=search&format=json&formatversion=2&origin=*&srlimit=6&srsearch=' +
     encodeURIComponent(q);
   return fetchWithTimeout(url, 9000).then(function (r) {
     return r.ok ? r.json() : null;
   }).then(function (j) {
     var hits = (j && j.query && j.query.search) || [];
-    var nt = normalize(cleanTitle(info.name));
-    for (var i = 0; i < hits.length; i++) {
-      if (normalize(hits[i].title).indexOf(nt) !== -1) {
-        return fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(hits[i].title.replace(/ /g, '_')))
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (s) { return s && s.wikibase_item; })
-          .catch(function () { return null; });
-      }
-    }
-    return null;
+    var nt = normalize(title);
+    var na = normalize(art);
+    var best = null, bestScore = 0;
+    hits.forEach(function (h) {
+      var t = h.title;
+      var n = normalize(t);
+      if (!nt || n.indexOf(nt) === -1) return;
+      if (n === na) return;                       /* Interpreten-Seite */
+      if (/\((album|studioalbum)\)/i.test(t)) return;
+      var sc = 1;
+      if (/\((lied|song|single)\)/i.test(t)) sc += 3;
+      if (n === nt) sc += 2;
+      if (sc > bestScore) { bestScore = sc; best = t; }
+    });
+    return best;
   }).catch(function () { return null; });
+}
+
+function fetchPlainExtract(lang, title) {
+  var url = 'https://' + lang + '.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&redirects=1&format=json&formatversion=2&origin=*&titles=' +
+    encodeURIComponent(title);
+  return fetchWithTimeout(url, 12000).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (j) {
+    var p = j && j.query && j.query.pages && j.query.pages[0];
+    return (p && p.extract) || null;
+  }).catch(function () { return null; });
+}
+
+function fetchArticleHtml(lang, title) {
+  return fetchWithTimeout('https://' + lang + '.wikipedia.org/api/rest_v1/page/html/' +
+    encodeURIComponent(title.replace(/ /g, '_')), 12000)
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .catch(function () { return null; });
+}
+
+function fetchQid(lang, title) {
+  return fetch('https://' + lang + '.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title.replace(/ /g, '_')))
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { return j && j.wikibase_item; })
+    .catch(function () { return null; });
+}
+
+function fetchSongArticleData(info) {
+  var deJob = findWikiArticle('de', info).then(function (t) {
+    if (!t) return null;
+    info.deArticle = t;
+    return fetchPlainExtract('de', t).then(function (txt) {
+      parseDeSongText(txt, info);
+      return t;
+    });
+  }).catch(function () { return null; });
+
+  var enJob = findWikiArticle('en', info).then(function (t) {
+    if (!t) return null;
+    info.enArticle = t;
+    return fetchArticleHtml('en', t).then(function (html) {
+      parseEnSongHtml(html, info);
+      return t;
+    });
+  }).catch(function () { return null; });
+
+  return Promise.all([deJob, enJob]).then(function (res) {
+    var lang = res[0] ? 'de' : (res[1] ? 'en' : null);
+    var title = res[0] || res[1];
+    if (!title) return null;
+    return fetchQid(lang, title).then(function (qid) {
+      return qid ? applyWikidata(qid, info) : null;
+    });
+  });
 }
 
 /* Wikidata: Sprache des Songs (P407), Verkaufszahlen (P2664) als Fallback */
@@ -988,7 +1118,11 @@ function applyWikidata(qid, info) {
     });
 }
 
-/* ---------- Songfacts: erster Fact, ins Deutsche übersetzt ---------- */
+/* ---------- "Ueber den Song": Songfacts, sonst Wikipedia ----------
+   Songfacts erlaubt keine direkten Browser-Abfragen, deshalb laufen die
+   Anfragen ueber oeffentliche CORS-Proxys. Findet sich dort nichts,
+   nehmen wir die Einleitung des englischen Wikipedia-Artikels - so ist
+   die Box fast immer gefuellt. */
 function songfactsSlug(s) {
   return String(s || '').toLowerCase().normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -1036,35 +1170,79 @@ function translateToGerman(text) {
   });
 }
 
-function fetchSongfact(info) {
+function tidyFact(t) {
+  var f = String(t || '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+  if (f.length > 900) f = f.slice(0, 900).replace(/\s+\S*$/, '') + ' \u2026';
+  return f;
+}
+
+/* Erster echter Fakt aus einer Songfacts-Seite */
+function extractSongfact(html) {
+  var doc = new DOMParser().parseFromString(html, 'text/html');
+  var lis = doc.querySelectorAll('li');
+  for (var i = 0; i < lis.length; i++) {
+    var li = lis[i];
+    var txt = (li.textContent || '').replace(/\s+/g, ' ').trim();
+    if (txt.length < 60 || txt.length > 1500) continue;
+    if (li.querySelectorAll('a').length > 5) continue;          /* Navigation */
+    if (/^(browse|sign in|newsletter|more songfacts|songplay|home)/i.test(txt)) continue;
+    if (!/[.!?]/.test(txt)) continue;                            /* kein Satz */
+    return tidyFact(txt);
+  }
+  return null;
+}
+
+function songfactUrls(info) {
   var artist = info.cardArtist || info.artists[0];
-  var url = 'https://www.songfacts.com/facts/' + songfactsSlug(artist) + '/' + songfactsSlug(cleanTitle(info.name));
-  return proxyFetch(url).then(function (html) {
-    var doc = new DOMParser().parseFromString(html, 'text/html');
-    var heads = doc.querySelectorAll('h1,h2,h3,h4,h5');
-    var fact = null;
-    for (var i = 0; i < heads.length; i++) {
-      var ht = (heads[i].textContent || '').trim();
-      if (!/songfacts/i.test(ht) || /more songfacts/i.test(ht)) continue;
-      var el = heads[i].nextElementSibling;
-      var hops = 0;
-      while (el && hops < 4) {
-        if (el.tagName === 'UL' || el.tagName === 'OL') {
-          var li = el.querySelector('li');
-          if (li) fact = li.textContent;
-          break;
-        }
-        el = el.nextElementSibling;
-        hops++;
-      }
-      if (fact) break;
-    }
-    if (!fact) return null;
-    fact = fact.replace(/\s+/g, ' ').trim();
-    if (fact.length < 30) return null;
-    if (fact.length > 900) fact = fact.slice(0, 900).replace(/\s+\S*$/, '') + ' \u2026';
-    return translateToGerman(fact).then(function (tr) {
-      return { text: tr.text, translated: tr.translated, url: url };
+  var titles = [cleanTitle(info.name), info.name];
+  var artists = [mainArtist(artist), artist];
+  var stripThe = function (s) { return String(s).replace(/^the\s+/i, ''); };
+  artists = artists.concat(artists.map(stripThe));
+  var out = [];
+  artists.forEach(function (a) {
+    titles.forEach(function (t) {
+      var u = 'https://www.songfacts.com/facts/' + songfactsSlug(a) + '/' + songfactsSlug(t);
+      if (u.indexOf('//') !== -1 && out.indexOf(u) === -1) out.push(u);
+    });
+  });
+  return out.slice(0, 5);
+}
+
+function fetchSongfact(info) {
+  var urls = songfactUrls(info);
+  var chain = Promise.resolve(null);
+  urls.forEach(function (u) {
+    chain = chain.then(function (found) {
+      if (found) return found;
+      return proxyFetch(u).then(function (html) {
+        var f = extractSongfact(html);
+        return f ? { raw: f, url: u, source: 'songfacts' } : null;
+      }).catch(function () { return null; });
+    });
+  });
+
+  return chain.then(function (hit) {
+    if (hit) return hit;
+    /* Plan B: Einleitung des englischen Wikipedia-Artikels */
+    return (info._articleJob || Promise.resolve()).then(function () {
+    if (!info.enArticle) return null;
+    return fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(info.enArticle.replace(/ /g, '_')))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.extract || j.extract.length < 60) return null;
+        return {
+          raw: tidyFact(j.extract),
+          url: (j.content_urls && j.content_urls.desktop && j.content_urls.desktop.page) ||
+            ('https://en.wikipedia.org/wiki/' + encodeURIComponent(info.enArticle.replace(/ /g, '_'))),
+          source: 'wikipedia'
+        };
+      })
+      .catch(function () { return null; });
+    });
+  }).then(function (hit) {
+    if (!hit) return null;
+    return translateToGerman(hit.raw).then(function (tr) {
+      return { text: tr.text, translated: tr.translated, url: hit.url, source: hit.source };
     });
   }).catch(function () { return null; });
 }
@@ -1344,6 +1522,14 @@ function stopScanner() {
   }
   var video = $('#camVideo');
   if (video) video.srcObject = null;
+}
+
+/* Kamera haengt sich gelegentlich auf - kompletter Neustart des Streams */
+function restartCamera() {
+  if (!state.scanning) { startScanner(); return; }
+  toast('Kamera wird neu gestartet \u2026');
+  stopScanner();
+  setTimeout(function () { startScanner(); }, 400);
 }
 
 var hintTimer = null;
@@ -1669,6 +1855,7 @@ function renderReveal(info) {
     $('#songfactText').textContent = info.songfact.text + noteTxt;
     var sl = $('#songfactLink');
     sl.href = info.songfact.url;
+    sl.textContent = (info.songfact.source === 'wikipedia' ? 'Quelle: Wikipedia' : 'Quelle: Songfacts') + '\u00a0\u2197';
     songBox.hidden = false;
   } else {
     songBox.hidden = true;
@@ -1839,6 +2026,7 @@ function bindEvents() {
     initPlayback();
     if (window.openModeScreen) { openModeScreen(); } else { startScanner(); }
   });
+  $('#btnScanReset').addEventListener('click', restartCamera);
   $('#btnCancelScan').addEventListener('click', function () {
     stopScanner();
     if (state.gameMode === 'party' && window.partyGoHub) { partyGoHub(); }
