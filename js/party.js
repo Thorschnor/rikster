@@ -71,6 +71,7 @@ function openModeScreen() {
 }
 
 function startNormalMode() {
+  activateAudio();
   state.gameMode = 'normal';
   document.body.classList.remove('party-guess');
   restoreWeiterButton();
@@ -899,6 +900,7 @@ document.addEventListener('DOMContentLoaded', function () {
   $('#btnTurnScan').addEventListener('click', function () {
     var p = curPlayer();
     if (p.place !== null) { toast('Du bist schon fertig \u2013 N\u00e4chster Spieler!'); return; }
+    activateAudio();
     partyScan(p.hadStart ? 'guess' : 'start');
   });
   $('#btnTurnBuy').addEventListener('click', function () {

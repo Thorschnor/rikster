@@ -324,6 +324,7 @@ function initPlayback() {
         clearTimeout(timer);
         state.sdkDeviceId = ev.device_id;
         state.sdkReady = true;
+        try { if (player.activateElement) player.activateElement(); } catch (e) { /* egal */ }
         finish(true);
       });
       player.addListener('not_ready', function () { state.sdkReady = false; });
@@ -388,19 +389,21 @@ function playTrack(trackId) {
     if (mode === 'sdk' && state.sdkReady && state.sdkDeviceId) {
       return api('/me/player/play?device_id=' + state.sdkDeviceId, { method: 'PUT', body: body })
         .then(function (res) {
-          if (res.ok || res.status === 204) return true;
-          return playRemote(body);
+          if (res.ok || res.status === 204) { verifySdkAudio(body); return true; }
+          return playRemote(body, state.sdkDeviceId);
         });
     }
     return playRemote(body);
   });
 }
 
-function playRemote(body) {
+function playRemote(body, excludeId) {
   return api('/me/player/devices').then(function (res) {
     return res.ok ? safeJson(res) : { devices: [] };
   }).then(function (data) {
-    var devices = ((data && data.devices) || []).filter(function (d) { return !d.is_restricted; });
+    var devices = ((data && data.devices) || []).filter(function (d) {
+      return !d.is_restricted && (!excludeId || d.id !== excludeId);
+    });
     if (!devices.length) throw { code: 'NO_DEVICE' };
     var dev = null;
     for (var i = 0; i < devices.length; i++) { if (devices[i].is_active) { dev = devices[i]; break; } }
@@ -411,9 +414,32 @@ function playRemote(body) {
     if (res.status === 404) throw { code: 'NO_DEVICE' };
     if (res.status === 403) throw { code: 'PREMIUM' };
     return safeJson(res).then(function (j) {
-      throw { code: 'PLAY_FAILED', detail: j && j.error && j.error.message };
+      throw { code: 'PLAY_FAILED', detail: (j && j.error && j.error.message) || ('HTTP ' + res.status) };
     });
   });
+}
+
+/* Browser blockieren In-App-Audio ohne frische Nutzer-Geste. Bleibt der
+   SDK-Player nach dem Start nachweislich stumm, übernimmt dauerhaft die
+   Fernsteuerung der Spotify-App – da ist der Ton garantiert. */
+function verifySdkAudio(body) {
+  setTimeout(function () {
+    if (!state.playing || state.mode !== 'sdk' || !state.sdkPlayer) return;
+    state.sdkPlayer.getCurrentState().then(function (st) {
+      if (st && !st.paused) return; /* spielt hörbar */
+      console.warn('In-App-Player stumm \u2013 wechsle auf Fernsteuerung');
+      var silent = state.sdkPlayer;
+      var silentId = state.sdkDeviceId;
+      state.mode = 'remote';
+      state.sdkReady = false;
+      state.sdkPlayer = null;
+      try { silent.disconnect(); } catch (e) { /* egal */ }
+      setModeBadge('Wiedergabe \u00fcber deine Spotify-App');
+      playRemote(body, silentId).then(function () {
+        setPlayerStatus('L\u00e4uft');
+      }).catch(handlePlayError);
+    }).catch(function () { /* egal */ });
+  }, 2500);
 }
 
 function stopPlayback() {
@@ -520,13 +546,18 @@ function searchMarket() {
   return '';
 }
 
+var lastSearchDiag = null; /* letzter Such-Fehlerstatus für Fehlermeldungen */
+
 function searchTracks(q, limit, offset) {
-  var url = '/search?type=track&limit=' + (limit || 20) +
+  /* Seit Februar 2026 erlaubt Spotify bei der Suche höchstens limit=10 */
+  var lim = Math.min(limit || 10, 10);
+  var url = '/search?type=track&limit=' + lim +
     (offset ? '&offset=' + offset : '') +
     searchMarket() +
     '&q=' + encodeURIComponent(q);
   return api(url).then(function (res) {
     if (!res.ok) {
+      lastSearchDiag = 'HTTP ' + res.status;
       console.warn('Spotify-Suche fehlgeschlagen', res.status, q);
       return [];
     }
@@ -588,16 +619,17 @@ function searchSpotifyTrack(meta) {
   }
 
   /* Suchstufen nacheinander, bis eine Treffer liefert */
+  lastSearchDiag = null;
   var step = Promise.resolve([]);
   queries.forEach(function (q) {
     step = step.then(function (items) {
       if (items.length) return items;
-      return searchTracks(q, 20);
+      return searchTracks(q, 10);
     });
   });
 
   return step.then(function (items) {
-    if (!items.length) throw { code: 'NO_MATCH' };
+    if (!items.length) throw { code: 'NO_MATCH', diag: lastSearchDiag };
     var best = null, bestScore = -Infinity;
     items.forEach(function (t) {
       var am = artistMatches(t);
@@ -606,7 +638,7 @@ function searchSpotifyTrack(meta) {
       var s = (am ? 4 : 0) + ts * 2 + yearScore(t) + (t.popularity || 0) / 100;
       if (s > bestScore) { bestScore = s; best = t; }
     });
-    if (!best) throw { code: 'NO_MATCH' };
+    if (!best) throw { code: 'NO_MATCH', diag: lastSearchDiag };
     return best.id;
   });
 }
@@ -618,7 +650,7 @@ function resolveHitsterCard(scan) {
     return searchSpotifyTrack(meta).then(function (id) {
       return { id: id, meta: meta };
     }).catch(function (err) {
-      if (err && err.code === 'NO_MATCH') throw { code: 'NO_MATCH', meta: meta };
+      if (err && err.code === 'NO_MATCH') throw { code: 'NO_MATCH', meta: meta, diag: err.diag };
       throw err;
     });
   });
@@ -628,7 +660,7 @@ function resolveHitsterCard(scan) {
    SONG-INFOS für die Auflösung
    ============================================================ */
 function fetchTrackInfo(trackId, cardMeta) {
-  return api('/tracks/' + trackId + '?market=from_token').then(function (res) {
+  return api('/tracks/' + trackId).then(function (res) {
     if (!res.ok) throw new Error('track ' + res.status);
     return res.json();
   }).then(function (t) {
@@ -1014,9 +1046,9 @@ function fetchYearContext(info) {
 }
 
 function fetchYearSongs(info, year) {
-  var offset = pickRandom([0, 40, 80]);
+  var offset = pickRandom([0, 10, 20]);
   function search(off) {
-    return searchTracks('year:' + year, 50, off);
+    return searchTracks('year:' + year, 10, off);
   }
   return search(offset).then(function (items) {
     if (!items.length && offset > 0) return search(0);
@@ -1087,9 +1119,9 @@ function prepareHints(info) {
 }
 
 function hintSameYearSong(info, year) {
-  var offset = pickRandom([0, 40, 80, 120]);
+  var offset = pickRandom([0, 10, 20, 30]);
   function search(off) {
-    return searchTracks('year:' + year, 50, off);
+    return searchTracks('year:' + year, 10, off);
   }
   return search(offset).then(function (items) {
     if (!items.length && offset > 0) return search(0);
@@ -1394,7 +1426,7 @@ function handleResolveError(err, scan) {
     var meta = err.meta || {};
     openModal({
       title: 'Song nicht gefunden',
-      text: 'Die Karte wurde erkannt (' + (meta.artist || '?') + ' \u2013 \u201e' + (meta.title || '?') + '\u201c), aber bei Spotify wurde kein passender Song gefunden.',
+      text: 'Die Karte wurde erkannt (' + (meta.artist || '?') + ' \u2013 \u201e' + (meta.title || '?') + '\u201c), aber bei Spotify wurde kein passender Song gefunden.' + (err.diag ? ' (Technik: Suche meldete ' + err.diag + ')' : ' (Suche lieferte 0 Treffer)'),
       primary: 'Neue Karte',
       onPrimary: goScan
     });
