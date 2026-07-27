@@ -496,3 +496,7 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
   .win-medal, .win-place, .win-name, .end-row { animation: none; }
   .win-float { display: none; }
 }
+
+/* Verbindungs-Check & Fußzeile */
+#modalText { white-space: pre-line; }
+.home-links { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12.5px; }

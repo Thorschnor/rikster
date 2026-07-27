@@ -398,7 +398,7 @@ function utilityError(err, scan, purpose) {
   }
   openModal({
     title: 'Karte konnte nicht gelesen werden',
-    text: 'Pr\u00fcfe deine Internetverbindung und versuche es erneut.',
+    text: 'Pr\u00fcfe deine Internetverbindung und versuche es erneut.' + (err && err.detail ? ' (Technik: ' + err.detail + ')' : ''),
     primary: 'Nochmal scannen',
     onPrimary: function () { partyScan(purpose); },
     secondary: 'Abbrechen'

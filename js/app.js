@@ -123,6 +123,14 @@ function formatRelease(release, precision) {
   } catch (e) { /* dann nur Jahr */ }
   return release.slice(0, 4);
 }
+/* Liest Status + Klartext-Grund aus einer Spotify-Fehlerantwort */
+function readApiError(res) {
+  return safeJson(res).then(function (j) {
+    var msg = j && j.error && (j.error.message || j.error.reason);
+    return 'HTTP ' + res.status + (msg ? ' \u2013 ' + msg : '');
+  });
+}
+
 function safeJson(res) {
   return res.json().then(function (j) { return j; }, function () { return null; });
 }
@@ -399,12 +407,17 @@ function playTrack(trackId) {
 
 function playRemote(body, excludeId) {
   return api('/me/player/devices').then(function (res) {
-    return res.ok ? safeJson(res) : { devices: [] };
+    if (!res.ok) {
+      return readApiError(res).then(function (d) {
+        throw { code: 'NO_DEVICE', why: 'Ger\u00e4te-Abfrage: ' + d };
+      });
+    }
+    return safeJson(res);
   }).then(function (data) {
     var devices = ((data && data.devices) || []).filter(function (d) {
       return !d.is_restricted && (!excludeId || d.id !== excludeId);
     });
-    if (!devices.length) throw { code: 'NO_DEVICE' };
+    if (!devices.length) throw { code: 'NO_DEVICE', why: 'Spotify meldet keine aktiven Ger\u00e4te' };
     var dev = null;
     for (var i = 0; i < devices.length; i++) { if (devices[i].is_active) { dev = devices[i]; break; } }
     if (!dev) dev = devices[0];
@@ -512,6 +525,7 @@ function loadHitsterCsv(lang) {
       map[num] = {
         artist: (r[1] || '').trim(),
         title: (r[2] || '').trim(),
+        yt: (r[3] || '').trim(), /* YouTube-Link – Plan B für die Zuordnung */
         year: parseInt(r[r.length - 1], 10) || null /* letzte Spalte = Jahr */
       };
     }
@@ -557,9 +571,11 @@ function searchTracks(q, limit, offset) {
     '&q=' + encodeURIComponent(q);
   return api(url).then(function (res) {
     if (!res.ok) {
-      lastSearchDiag = 'HTTP ' + res.status;
-      console.warn('Spotify-Suche fehlgeschlagen', res.status, q);
-      return [];
+      return readApiError(res).then(function (d) {
+        lastSearchDiag = d;
+        console.warn('Spotify-Suche fehlgeschlagen', d, q);
+        return [];
+      });
     }
     return res.json().then(function (j) {
       return (j && j.tracks && j.tracks.items) || [];
@@ -643,15 +659,35 @@ function searchSpotifyTrack(meta) {
   });
 }
 
+/* Plan B ohne Spotify-Suche: der YouTube-Link aus der Community-Datenbank
+   wird über die freie Odesli-API (song.link) in einen Spotify-Track übersetzt.
+   Funktioniert auch, wenn Spotify die Suche verweigert (z. B. HTTP 403). */
+function resolveViaOdesli(ytUrl) {
+  if (!ytUrl || !/^https?:\/\//i.test(ytUrl)) return Promise.reject(new Error('kein Link'));
+  var url = 'https://api.song.link/v1-alpha.1/links?userCountry=DE&url=' + encodeURIComponent(ytUrl);
+  return fetchWithTimeout(url, 9000).then(function (r) {
+    if (!r.ok) throw new Error('odesli ' + r.status);
+    return r.json();
+  }).then(function (j) {
+    var sp = j && j.linksByPlatform && j.linksByPlatform.spotify && j.linksByPlatform.spotify.url;
+    var m = sp && sp.match(/track\/([A-Za-z0-9]{22})/);
+    if (!m) throw new Error('kein Spotify-Link');
+    return m[1];
+  });
+}
+
 function resolveHitsterCard(scan) {
   return loadHitsterCsv(scan.lang).then(function (map) {
     var meta = map[scan.num];
     if (!meta || !meta.title) throw { code: 'CARD_UNKNOWN' };
-    return searchSpotifyTrack(meta).then(function (id) {
+    return searchSpotifyTrack(meta).catch(function (err) {
+      var diag = (err && err.diag) || null;
+      return resolveViaOdesli(meta.yt).catch(function (e2) {
+        console.warn('Odesli-Fallback', e2);
+        throw { code: 'NO_MATCH', meta: meta, diag: diag };
+      });
+    }).then(function (id) {
       return { id: id, meta: meta };
-    }).catch(function (err) {
-      if (err && err.code === 'NO_MATCH') throw { code: 'NO_MATCH', meta: meta, diag: err.diag };
-      throw err;
     });
   });
 }
@@ -661,7 +697,9 @@ function resolveHitsterCard(scan) {
    ============================================================ */
 function fetchTrackInfo(trackId, cardMeta) {
   return api('/tracks/' + trackId).then(function (res) {
-    if (!res.ok) throw new Error('track ' + res.status);
+    if (!res.ok) {
+      return readApiError(res).then(function (d) { throw { code: 'INFO', detail: d }; });
+    }
     return res.json();
   }).then(function (t) {
     var album = t.album || {};
@@ -1390,13 +1428,18 @@ function startTrack(trackId, cardMeta) {
   state.currentTrackId = trackId;
   state.cardMeta = cardMeta || null;
   state.trackInfo = null;
+  state.infoError = null;
   resetHints();
 
   state.infoPromise = fetchTrackInfo(trackId, state.cardMeta).then(function (info) {
     state.trackInfo = info;
     if (state.assists) prepareHints(info);
     return info;
-  }).catch(function () { return null; });
+  }).catch(function (e) {
+    state.infoError = (e && e.detail) || (e && e.message) || 'unbekannter Fehler';
+    console.warn('Song-Infos', e);
+    return null;
+  });
 
   setPlayerStatus('Wird gestartet \u2026');
   setVinylSpinning(true);
@@ -1452,7 +1495,7 @@ function handlePlayError(err) {
   if (code === 'NO_DEVICE') {
     openModal({
       title: 'Kein Wiedergabe-Ger\u00e4t gefunden',
-      text: 'Rikster steuert gerade deine Spotify-App fern, findet aber kein aktives Ger\u00e4t. \u00d6ffne kurz die Spotify-App, spiele irgendein Lied an, pausiere es und komm hierher zur\u00fcck.',
+      text: 'Rikster steuert gerade deine Spotify-App fern, findet aber kein aktives Ger\u00e4t. \u00d6ffne kurz die Spotify-App, spiele irgendein Lied an, pausiere es und komm hierher zur\u00fcck.' + (err && err.why ? ' (Technik: ' + err.why + ')' : ''),
       primary: 'Erneut versuchen',
       onPrimary: retryPlay,
       secondary: 'Neue Karte',
@@ -1583,6 +1626,8 @@ function renderReveal(info) {
     $('#revArtist').textContent = 'Hoppla';
     $('#revYear').textContent = '?';
     $('#revTitle').textContent = '\u00a0';
+    $('#revError').textContent = 'Die Song-Infos konnten nicht geladen werden.' +
+      (state.infoError ? ' (Technik: ' + state.infoError + ')' : ' Pr\u00fcfe deine Internetverbindung.');
     $('#revError').hidden = false;
     return;
   }
@@ -1738,8 +1783,48 @@ function boot() {
   start.then(function () {
     if (!isLoggedIn()) { showScreen('screen-auth'); return; }
     showScreen('screen-home');
+    $('#homeLinks').hidden = false;
     hydrateProfile();
     initPlayback();
+  });
+}
+
+/* Prüft die wichtigsten Spotify-Zugriffe und zeigt das Ergebnis im Modal –
+   so lässt sich die Ursache (z. B. HTTP 403) direkt am Handy ablesen. */
+function runDiagnose() {
+  openModal({ title: 'Verbindungs-Check', text: 'Pr\u00fcfe Spotify-Zugriff \u2026', primary: 'Schlie\u00dfen' });
+  var lines = [];
+  function check(label, path) {
+    return api(path).then(function (res) {
+      if (res.ok) { lines.push('\u2705 ' + label); return true; }
+      return readApiError(res).then(function (d) { lines.push('\u274c ' + label + ': ' + d); return false; });
+    }).catch(function (e) {
+      lines.push('\u274c ' + label + ': ' + ((e && e.message) || e));
+      return false;
+    });
+  }
+  ensureToken().then(function () {
+    lines.push('\u2705 Anmeldung: g\u00fcltiges Token');
+    return check('Profil (/me)', '/me')
+      .then(function () { return check('Song-Abruf (Testsong)', '/tracks/3n3Ppam7vgaVa1iaRUc9Lp'); })
+      .then(function () { return check('Suche', '/search?type=track&limit=5&q=test'); })
+      .then(function () {
+        return api('/me/player/devices').then(function (res) {
+          if (!res.ok) return readApiError(res).then(function (d) { lines.push('\u274c Ger\u00e4te: ' + d); });
+          return safeJson(res).then(function (j) {
+            var ds = (j && j.devices) || [];
+            lines.push(ds.length
+              ? ('\u2705 Ger\u00e4te: ' + ds.map(function (d) { return d.name; }).join(', '))
+              : '\u26a0\ufe0f Ger\u00e4te: keine gemeldet \u2013 Spotify-App \u00f6ffnen, ein Lied kurz anspielen und pausieren');
+          });
+        }).catch(function (e) { lines.push('\u274c Ger\u00e4te: ' + ((e && e.message) || e)); });
+      });
+  }).catch(function () {
+    lines.push('\u274c Keine g\u00fcltige Anmeldung \u2013 bitte abmelden und neu anmelden');
+  }).then(function () {
+    lines.push('');
+    lines.push('Steht oben \u201eUser not registered in the Developer Dashboard\u201c: Du bist mit einem anderen Spotify-Konto angemeldet als dem, dem die App im Developer-Dashboard geh\u00f6rt. Dann hier abmelden und mit dem Besitzer-Konto anmelden \u2013 oder dein Konto im Dashboard unter \u201eUser Management\u201c hinzuf\u00fcgen.');
+    $('#modalText').textContent = lines.join('\n');
   });
 }
 
@@ -1771,6 +1856,7 @@ function bindEvents() {
   });
   $('#btnHint').addEventListener('click', onHintButton);
   $('#btnHintClose').addEventListener('click', hideHint);
+  $('#btnDiag').addEventListener('click', runDiagnose);
   $('#toggleAssists').addEventListener('click', function () {
     applyAssists(!state.assists, true);
   });
