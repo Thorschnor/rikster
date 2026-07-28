@@ -2159,6 +2159,7 @@ function fixField(feld) {
         refreshExtras(info);
       }
       toast('Gespeichert \u2013 gilt ab jetzt auch beim n\u00e4chsten Scan');
+      if (state.gameMode === 'party' && window.partyOnFixApplied) partyOnFixApplied(feld, info);
     },
     secondary: gespeichert !== undefined ? 'Korrektur entfernen' : null,
     onSecondary: gespeichert !== undefined ? function () {

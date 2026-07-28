@@ -337,11 +337,43 @@ function resolveScanToTrack(scan) {
 }
 
 function makeCard(info) {
+  var f = (typeof fixGet === 'function' && fixGet(info.id)) || {};
   return {
     year: parseInt(info.year, 10),
-    artist: (state.cardMeta && state.cardMeta.artist) || info.artists.join(', '),
-    title: (state.cardMeta && state.cardMeta.title) || info.name
+    artist: f.artist ? info.artists.join(', ') : ((state.cardMeta && state.cardMeta.artist) || info.artists.join(', ')),
+    title: f.title ? info.name : ((state.cardMeta && state.cardMeta.title) || info.name)
   };
+}
+
+/* ---------- Zustand sichern, um eine Auswertung neu rechnen zu koennen ---------- */
+function snapshotState() {
+  return {
+    players: party.players.map(function (pl) {
+      return {
+        timeline: pl.timeline.slice(),
+        attLen: pl.att.length,
+        place: pl.place,
+        bought: pl.bought, received: pl.received, given: pl.given, dropped: pl.dropped
+      };
+    }),
+    nextPlace: party.nextPlace,
+    ended: party.ended,
+    turnIdx: party.turnIdx
+  };
+}
+
+function restoreState(s) {
+  party.players.forEach(function (pl, i) {
+    var q = s.players[i];
+    pl.timeline = q.timeline.slice();
+    pl.att = pl.att.slice(0, q.attLen);
+    pl.place = q.place;
+    pl.bought = q.bought; pl.received = q.received; pl.given = q.given; pl.dropped = q.dropped;
+  });
+  party.nextPlace = s.nextPlace;
+  party.ended = s.ended;
+  party.turnIdx = s.turnIdx;
+  party.pending = null;
 }
 
 function applyUtilityCard(purpose, info) {
@@ -355,6 +387,7 @@ function applyUtilityCard(purpose, info) {
     });
     return;
   }
+  party.redo = { kind: purpose, snap: snapshotState() };
   if (purpose === 'start') {
     insertCard(p, card);
     p.hadStart = true;
@@ -475,6 +508,7 @@ function evaluatePlacement(idx, info) {
     return;
   }
   var card = makeCard(info);
+  party.redo = { kind: 'guess', idx: idx, snap: snapshotState() };
   var Y = p.timeline.map(function (c) { return c.year; });
   var ok = (idx === 0 || Y[idx - 1] <= y) && (idx === Y.length || y <= Y[idx]);
   var att = { correct: ok, bought: false, year: y, decade: Math.floor(y / 10) * 10, genre: null };
@@ -574,9 +608,11 @@ function renderResultActions() {
   if (res && res.kind === 'bad' && party.pending) {
     box.appendChild(actionBtn('Einem Mitspieler geben', 'btn btn-amber', fateGiveMenu));
     box.appendChild(actionBtn('Karte abwerfen', 'btn btn-ghost', fateDrop));
+    box.appendChild(actionBtn('Karte korrigieren', 'btn btn-ghost', onCorrectCard));
     box.appendChild(actionBtn('Details zum Song', 'btn btn-ghost', showDetails));
     return;
   }
+  box.appendChild(actionBtn('Karte korrigieren', 'btn btn-ghost', onCorrectCard));
   box.appendChild(actionBtn('Details zum Song', 'btn btn-ghost', showDetails));
   box.appendChild(actionBtn('Weiter', 'btn btn-amber', closeResultToHub));
 }
@@ -641,6 +677,12 @@ function fateGiveTo(pl) {
 }
 
 /* --- Volle Auflösung des Songs aus dem Ergebnis heraus --- */
+function onCorrectCard() {
+  if (typeof onFix !== 'function') { toast('Korrektur gerade nicht m\u00f6glich'); return; }
+  hidePartySheet();
+  onFix();
+}
+
 function showDetails() {
   hidePartySheet();
   showReveal(true);
@@ -649,6 +691,57 @@ function partyOnRevealBack() {
   hideReveal();
   if (party && party.last) { openPartySheet(); return; }
   partyGoHub();
+}
+
+/* ============================================================
+   KARTE KORRIGIEREN (wertet die Einordnung neu aus)
+   ============================================================ */
+function partyOnFixApplied(feld, info) {
+  if (!party || !party.redo || !party.last) return;
+
+  /* Interpret/Titel: nur die Anzeige auffrischen, Wertung bleibt */
+  if (feld !== 'year') {
+    var c = party.last.card;
+    if (c) {
+      var neu = makeCard(info);
+      c.artist = neu.artist;
+      c.title = neu.title;
+    }
+    partySave();
+    renderHub();
+    showPartyResult();
+    return;
+  }
+
+  var r = party.redo;
+  if (r.kind === 'guess') {
+    /* Alles auf den Stand vor dem Einordnen zuruecksetzen und neu rechnen */
+    var vorher = party.last.kind;
+    restoreState(r.snap);
+    hidePartySheet();
+    evaluatePlacement(r.idx, info);
+    var nachher = party.last.kind;
+    if (vorher !== nachher) {
+      toast(nachher === 'ok' ? 'Mit dem neuen Jahr passt es \u2013 Karte z\u00e4hlt!' : 'Mit dem neuen Jahr passt es leider nicht mehr');
+    } else {
+      toast(nachher === 'ok' ? 'Passt weiterhin' : 'Passt leider immer noch nicht');
+    }
+    return;
+  }
+
+  /* Start- oder Kaufkarte: liegt immer richtig, nur neu einsortieren */
+  var karte = party.last.card;
+  var spieler = curPlayer();
+  var i = spieler.timeline.indexOf(karte);
+  var jahr = parseInt(info.year, 10);
+  if (i !== -1 && isFinite(jahr)) {
+    spieler.timeline.splice(i, 1);
+    karte.year = jahr;
+    insertCard(spieler, karte);
+  }
+  partySave();
+  renderHub();
+  showPartyResult();
 }
 
 /* ============================================================
