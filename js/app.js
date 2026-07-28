@@ -25,7 +25,7 @@
 var CFG = window.RIKSTER_CONFIG || {};
 var CLIENT_ID = String(CFG.SPOTIFY_CLIENT_ID || '').trim();
 var REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
-var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
+var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative';
 var API_BASE = 'https://api.spotify.com/v1';
 var HITSTER_DB = 'https://raw.githubusercontent.com/andygruber/songseeker-hitster-playlists/main/';
 var CORS_PROXIES = [
@@ -227,6 +227,7 @@ function login() {
 }
 
 function saveTokens(data) {
+  if (data.scope) { try { localStorage.setItem('rikster_scopes', data.scope); } catch (e) { /* egal */ } }
   if (data.access_token) localStorage.setItem(LS.access, data.access_token);
   if (data.refresh_token) localStorage.setItem(LS.refresh, data.refresh_token);
   var ttl = (data.expires_in || 3600) - 60;
@@ -282,6 +283,21 @@ function ensureToken() {
     });
   }
   return Promise.reject(new Error('not-logged-in'));
+}
+
+function hasPlaylistScope() {
+  var s = '';
+  try { s = localStorage.getItem('rikster_scopes') || ''; } catch (e) { /* egal */ }
+  return s.indexOf('playlist-read-private') !== -1;
+}
+
+/* Ein aufgefrischtes Token behaelt die alten Berechtigungen -
+   fuer neue Rechte ist eine komplett neue Anmeldung noetig. */
+function reauthorize() {
+  localStorage.removeItem(LS.access);
+  localStorage.removeItem(LS.refresh);
+  localStorage.removeItem(LS.expires);
+  login();
 }
 
 function isLoggedIn() {
@@ -813,52 +829,124 @@ function loadBuiltinEdition(lang) {
   });
 }
 
+/* Spotify hat im Februar 2026 /tracks durch /items ersetzt und liefert
+   fuer Playlist-Inhalte haeufig 403. Deshalb drei Wege nacheinander:
+   1) neuer Endpunkt /items  2) alter Endpunkt /tracks
+   3) oeffentliche Embed-Seite ueber einen CORS-Proxy auslesen und die
+      Titel-Daten einzeln ueber /tracks nachladen. */
 function fetchPlaylistTracks(pid) {
+  return fetchPlaylistViaApi(pid, 'items').catch(function (e1) {
+    console.warn('Playlist ueber /items fehlgeschlagen', e1 && e1.detail);
+    return fetchPlaylistViaApi(pid, 'tracks').catch(function (e2) {
+      console.warn('Playlist ueber /tracks fehlgeschlagen', e2 && e2.detail);
+      return fetchPlaylistViaEmbed(pid).catch(function (e3) {
+        console.warn('Playlist ueber Embed-Seite fehlgeschlagen', e3);
+        throw e2;
+      });
+    });
+  });
+}
+
+function trackFromItem(it) {
+  var t = it && (it.track || it.item);
+  if (!t && it && it.id && it.name) t = it;
+  if (!t || !t.id) return null;
+  return {
+    tid: t.id,
+    artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
+    title: t.name,
+    year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
+  };
+}
+
+function fetchPlaylistViaApi(pid, kind) {
   var out = [];
   var seen = 0;
-  var FIELDS = 'items(track(id,name,artists(name),album(release_date)))';
-
-  function page(off, useFields) {
-    var url = '/playlists/' + pid + '/tracks?limit=50&offset=' + off + searchMarket() +
-      (useFields ? ('&fields=' + encodeURIComponent(FIELDS)) : '');
+  function page(off) {
+    var url = '/playlists/' + pid + '/' + kind + '?limit=50&offset=' + off + searchMarket();
     return api(url).then(function (res) {
       if (!res.ok) {
         return readApiError(res).then(function (d) {
-          /* Manche Spotify-Versionen mögen den Feldfilter nicht – ohne ihn nochmal probieren */
-          if (useFields) {
-            console.warn('Playlist-Abruf mit Feldfilter fehlgeschlagen (' + d + ') \u2013 erneut ohne Filter');
-            return page(off, false);
-          }
-          throw { code: 'PL_ERROR', detail: d + ' [Liste ' + pid + ']' };
+          throw { code: 'PL_ERROR', status: res.status, detail: d + ' [' + kind + ', Liste ' + pid + ']' };
         });
       }
       return res.json().then(function (j) {
         var items = (j && j.items) || [];
         seen += items.length;
         items.forEach(function (it) {
-          var t = it && it.track;
-          if (!t || !t.id) return;
-          out.push({
-            tid: t.id,
-            artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
-            title: t.name,
-            year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
-          });
+          var t = trackFromItem(it);
+          if (t) out.push(t);
         });
-        if (items.length === 50 && out.length < 1500) return page(off + 50, useFields);
+        if (items.length === 50 && out.length < 1500) return page(off + 50);
         if (!out.length) {
           throw {
             code: 'PL_EMPTY',
-            detail: seen
-              ? (seen + ' Eintr\u00e4ge gefunden, aber keiner abrufbar [Liste ' + pid + ']')
-              : ('Liste ist leer oder nicht \u00f6ffentlich [Liste ' + pid + ']')
+            detail: seen ? (seen + ' Eintraege, aber keiner lesbar') : ('Liste leer oder nicht oeffentlich [Liste ' + pid + ']')
           };
         }
         return out;
       });
     });
   }
-  return page(0, true);
+  return page(0);
+}
+
+/* Notweg ohne Playlist-Schnittstelle: die oeffentliche Embed-Seite
+   enthaelt die Titelreihenfolge, die Daten holen wir per /tracks. */
+function fetchPlaylistViaEmbed(pid) {
+  return proxyFetch('https://open.spotify.com/embed/playlist/' + pid).then(function (html) {
+    var ids = [];
+    var m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (m) {
+      try {
+        var found = null;
+        (function dig(node, depth) {
+          if (found || !node || depth > 12 || typeof node !== 'object') return;
+          if (Array.isArray(node.trackList)) { found = node.trackList; return; }
+          Object.keys(node).forEach(function (k) { dig(node[k], depth + 1); });
+        })(JSON.parse(m[1]), 0);
+        if (found) {
+          found.forEach(function (t) {
+            var mm = String(t && t.uri || '').match(/track:([A-Za-z0-9]{22})/);
+            if (mm) ids.push(mm[1]);
+          });
+        }
+      } catch (e) { /* weiter unten Notfallmuster */ }
+    }
+    if (!ids.length) {
+      var re = /spotify:track:([A-Za-z0-9]{22})/g, mm2;
+      while ((mm2 = re.exec(html)) !== null) ids.push(mm2[1]);
+    }
+    if (!ids.length) throw { code: 'PL_EMBED_EMPTY' };
+    return enrichTrackIds(ids);
+  });
+}
+
+/* Titel-Infos in Bloecken zu 50 nachladen (Reihenfolge bleibt erhalten) */
+function enrichTrackIds(ids) {
+  var out = [];
+  function block(i) {
+    if (i >= ids.length) return Promise.resolve(out);
+    var part = ids.slice(i, i + 50);
+    return api('/tracks?ids=' + part.join(',') + searchMarket()).then(function (res) {
+      if (!res.ok) {
+        return readApiError(res).then(function (d) { throw { code: 'PL_ERROR', detail: d + ' [Titel-Abruf]' }; });
+      }
+      return res.json();
+    }).then(function (j) {
+      (j && j.tracks || []).forEach(function (t) {
+        if (!t || !t.id) { out.push({ tid: null, artist: '?', title: '?', year: null }); return; }
+        out.push({
+          tid: t.id,
+          artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
+          title: t.name,
+          year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
+        });
+      });
+      return block(i + 50);
+    });
+  }
+  return block(0);
 }
 
 function playlistCard(lang, num) {
@@ -1961,10 +2049,24 @@ function handleResolveError(err, scan) {
     return;
   }
   if (code === 'BUILTIN_FAIL') {
+    var is403 = /\b403\b/.test(String(err.detail || ''));
+    if (is403 && !hasPlaylistScope()) {
+      openModal({
+        title: 'Berechtigung fehlt',
+        text: 'Spotify verweigert den Zugriff auf Playlists (403).\n\nRikster braucht daf\u00fcr eine zus\u00e4tzliche Berechtigung, die es bei deiner Anmeldung noch nicht gab. Melde dich einmal neu an \u2013 danach sollte es klappen.' +
+          (err.detail ? '\n\nTechnik: ' + err.detail : ''),
+        primary: 'Jetzt neu anmelden',
+        onPrimary: reauthorize,
+        secondary: 'Sp\u00e4ter',
+        onSecondary: goScan
+      });
+      return;
+    }
     openModal({
       title: 'Songliste nicht ladbar',
       text: 'Die f\u00fcr diese Edition hinterlegten Spotify-Playlists konnten nicht geladen werden.' +
         (err.detail ? '\n\nTechnik: ' + err.detail : '') +
+        (is403 ? '\n\nSpotify sperrt seit dem Februar-Umbau bei manchen Konten das Auslesen von Playlists \u00fcber die Schnittstelle.' : '') +
         '\n\nDu kannst stattdessen eigene Playlist-Links verkn\u00fcpfen.',
       primary: 'Erneut versuchen',
       onPrimary: function () { onScanned(scan); },
@@ -2310,7 +2412,17 @@ function runDiagnose() {
       .then(function () { return check('Suche', '/search?type=track&limit=5&q=test'); })
       .then(function () {
         var ids = BUILTIN_EDITIONS['de-aaaa0064'].playlists;
-        return check('Playlist-Abruf (Battle of the Generations)', '/playlists/' + ids[0] + '/tracks?limit=1');
+        return check('Playlist-Abruf neu (/items)', '/playlists/' + ids[0] + '/items?limit=1')
+          .then(function (ok) {
+            if (ok) return true;
+            return check('Playlist-Abruf alt (/tracks)', '/playlists/' + ids[0] + '/tracks?limit=1');
+          })
+          .then(function (ok) {
+            if (!ok && !hasPlaylistScope()) {
+              lines.push('\u2139\ufe0f Deiner Anmeldung fehlt die Playlist-Berechtigung \u2013 einmal abmelden und neu anmelden.');
+            }
+            return ok;
+          });
       })
       .then(function () {
         return api('/me/player/devices').then(function (res) {
