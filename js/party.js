@@ -223,7 +223,7 @@ function tlCardEl(card) {
   d.className = 'tl-card';
   var a = document.createElement('div'); a.className = 'tl-a'; a.textContent = card.artist;
   var y = document.createElement('div'); y.className = 'tl-y'; y.textContent = card.year;
-  var t = document.createElement('div'); t.className = 'tl-t'; t.textContent = card.title;
+  var t = document.createElement('div'); t.className = 'tl-t'; t.textContent = displayTitle(card.title);
   d.appendChild(a); d.appendChild(y); d.appendChild(t);
   return d;
 }
@@ -540,7 +540,7 @@ function showPartyResult() {
     : 'STARTKARTE';
   $('#prArtist').textContent = res.card.artist;
   $('#prYear').textContent = res.card.year;
-  $('#prTitle').textContent = res.card.title;
+  $('#prTitle').textContent = displayTitle(res.card.title);
   $('#prText').textContent = resultText(res);
   renderResultActions();
   openPartySheet();

@@ -169,6 +169,19 @@ function normalize(s) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, ' ').trim();
 }
+/* Anzeigetitel fuer die Karte: Gastmusiker-Zusaetze raus, weil die
+   Interpreten ohnehin darueber stehen. Alles andere bleibt erhalten. */
+function displayTitle(t) {
+  var s = String(t || '');
+  var out = s
+    .replace(/\s*[\(\[]\s*(feat|ft|featuring|with)\.?\s[^\)\]]*[\)\]]/ig, '')
+    .replace(/\s*[-\u2013]\s*(feat|ft|featuring)\.?\s.*$/i, '')
+    .replace(/\s+(feat|ft|featuring)\.\s.*$/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return out || s;
+}
+
 function cleanTitle(t) {
   return String(t || '')
     .replace(/\s*[-\u2013]\s*(remaster|single|radio|live|version|edit|mono|stereo|from)[^]*$/i, '')
@@ -2007,7 +2020,7 @@ function renderReveal(info) {
   $('#btnFix').hidden = false;
   $('#revArtist').textContent = info.artists.join(', ');
   $('#revYear').textContent = info.year || '?';
-  $('#revTitle').textContent = info.name;
+  $('#revTitle').textContent = displayTitle(info.name);
 
   var cover = $('#revCover');
   var img = info.images[1] || info.images[0];
