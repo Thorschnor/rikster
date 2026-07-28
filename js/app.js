@@ -39,6 +39,7 @@ var LS = {
   expires: 'rikster_expires',
   verifier: 'rikster_verifier',
   assists: 'rikster_assists',
+  yearfix: 'rikster_yearfix',
   party: 'rikster_party'
 };
 
@@ -84,10 +85,23 @@ function openModal(opts) {
   var m = $('#modal');
   $('#modalTitle').textContent = opts.title || '';
   $('#modalText').textContent = opts.text || '';
+  var inp = $('#modalInput');
+  if (opts.input) {
+    inp.hidden = false;
+    inp.value = opts.input.value || '';
+    inp.placeholder = opts.input.placeholder || '';
+  } else {
+    inp.hidden = true;
+    inp.value = '';
+  }
   var p = $('#modalPrimary');
   var s = $('#modalSecondary');
   p.textContent = opts.primary || 'OK';
-  p.onclick = function () { closeModal(); if (opts.onPrimary) opts.onPrimary(); };
+  p.onclick = function () {
+    var val = opts.input ? inp.value.trim() : undefined;
+    closeModal();
+    if (opts.onPrimary) opts.onPrimary(val);
+  };
   if (opts.secondary) {
     s.hidden = false;
     s.textContent = opts.secondary;
@@ -747,6 +761,61 @@ function resolveHitsterCard(scan) {
 /* ============================================================
    SONG-INFOS für die Auflösung
    ============================================================ */
+/* ---------- Jahresangaben ----------
+   Spotify liefert das Datum des ALBUMS, auf dem der Titel liegt. Bei
+   alten Songs ist das oft ein Remaster oder eine Compilation - dann
+   stimmt das Jahr nicht. Zwei Gegenmittel:
+   1) Liegt der Karte kein Jahr bei, suchen wir die frueheste Fassung.
+   2) Eigene Korrekturen ueberschreiben alles und bleiben gespeichert. */
+function yearFixAll() {
+  try { return JSON.parse(localStorage.getItem(LS.yearfix) || '{}') || {}; } catch (e) { return {}; }
+}
+function yearFixGet(trackId) {
+  var y = yearFixAll()[trackId];
+  return (typeof y === 'number' && isFinite(y)) ? y : null;
+}
+function yearFixSet(trackId, year) {
+  var all = yearFixAll();
+  if (year === null) delete all[trackId]; else all[trackId] = year;
+  try { localStorage.setItem(LS.yearfix, JSON.stringify(all)); } catch (e) { toast('Konnte nicht gespeichert werden'); }
+}
+
+function applyYear(info, y) {
+  var sy = parseInt(info.year, 10);
+  info.year = String(y);
+  if (!isFinite(sy) || sy !== y) { info.release = null; info.precision = null; }
+}
+
+/* Frueheste Veroeffentlichung desselben Songs bei Spotify finden */
+function findOriginalYear(artist, title) {
+  var t = cleanTitle(title);
+  var a = mainArtist(artist);
+  return searchTracks('track:"' + t.replace(/"/g, '') + '" artist:"' + a.replace(/"/g, '') + '"', 10)
+    .then(function (items) {
+      if (!items.length) return searchTracks(t + ' ' + a, 10);
+      return items;
+    })
+    .then(function (items) {
+      var nt = normalize(t);
+      var na = normalize(a);
+      var best = null;
+      items.forEach(function (it) {
+        var ct = normalize(cleanTitle(it.name));
+        if (ct !== nt && ct.indexOf(nt) === -1 && nt.indexOf(ct) === -1) return;
+        var passt = (it.artists || []).some(function (ar) {
+          var n = normalize(ar.name);
+          return n === na || n.indexOf(na) !== -1 || na.indexOf(n) !== -1;
+        });
+        if (!passt) return;
+        var y = parseInt(String((it.album && it.album.release_date) || '').slice(0, 4), 10);
+        if (!isFinite(y) || y < 1900) return;
+        if (best === null || y < best) best = y;
+      });
+      return best;
+    })
+    .catch(function () { return null; });
+}
+
 function fetchTrackInfo(trackId, cardMeta) {
   return api('/tracks/' + trackId).then(function (res) {
     if (!res.ok) {
@@ -771,16 +840,26 @@ function fetchTrackInfo(trackId, cardMeta) {
     };
     /* Bei offiziellen Karten gilt das Jahr der Karte – Spotify listet
        oft Remaster/Compilations mit späterem Datum. */
+    var schritt = Promise.resolve();
     if (cardMeta) {
       info.cardArtist = cardMeta.artist;
       if (cardMeta.year) {
-        var sy = parseInt(info.year, 10);
-        info.year = String(cardMeta.year);
-        if (isFinite(sy) && sy !== cardMeta.year) { info.release = null; info.precision = null; }
+        applyYear(info, cardMeta.year);
+      } else {
+        /* Karte ohne Jahresangabe: frueheste Fassung suchen */
+        schritt = findOriginalYear(cardMeta.artist || info.artists[0], cardMeta.title || info.name)
+          .then(function (y) {
+            var sy = parseInt(info.year, 10);
+            if (y && (!isFinite(sy) || y < sy)) applyYear(info, y);
+          });
       }
     }
-    info.extras = fetchExtras(info);
-    return info;
+    return schritt.then(function () {
+      var fix = yearFixGet(trackId);
+      if (fix) applyYear(info, fix);
+      info.extras = fetchExtras(info);
+      return info;
+    });
   });
 }
 
@@ -1837,6 +1916,7 @@ function renderRevealLoading() {
   $('#revTitle').textContent = '\u00a0';
   $('#revCover').hidden = true;
   $('#revChips').innerHTML = '';
+  $('#btnYearFix').hidden = true;
   $('#revSong').hidden = true;
   $('#revYearSongs').hidden = true;
   $('#revYearEvents').hidden = true;
@@ -1882,6 +1962,7 @@ function renderReveal(info) {
     return;
   }
   $('#revError').hidden = true;
+  $('#btnYearFix').hidden = false;
   $('#revArtist').textContent = info.artists.join(', ');
   $('#revYear').textContent = info.year || '?';
   $('#revTitle').textContent = info.name;
@@ -1966,6 +2047,43 @@ function renderReveal(info) {
   } else {
     wikiBox.hidden = true;
   }
+}
+
+function onYearFix() {
+  var info = state.trackInfo;
+  if (!info) { toast('Song-Infos sind noch nicht geladen'); return; }
+  var gespeichert = yearFixGet(info.id);
+  openModal({
+    title: 'Jahr korrigieren',
+    text: info.artists.join(', ') + ' \u2013 \u201e' + info.name + '\u201c\n\nWelches Jahr steht auf der Karte?',
+    input: { placeholder: 'z.\u202fB. 1984', value: info.year || '' },
+    primary: 'Speichern',
+    onPrimary: function (val) {
+      var y = parseInt(String(val || '').replace(/\D/g, ''), 10);
+      if (!isFinite(y) || y < 1900 || y > 2100) { toast('Bitte eine Jahreszahl zwischen 1900 und 2100'); return; }
+      yearFixSet(info.id, y);
+      setCorrectedYear(info, y);
+      toast('Jahr gespeichert \u2013 gilt ab jetzt auch beim n\u00e4chsten Scan');
+    },
+    secondary: gespeichert ? 'Korrektur entfernen' : null,
+    onSecondary: gespeichert ? function () {
+      yearFixSet(info.id, null);
+      toast('Korrektur entfernt \u2013 beim n\u00e4chsten Scan gilt wieder das Jahr von Spotify');
+    } : null
+  });
+}
+
+/* Korrigiertes Jahr sofort ueberall anwenden */
+function setCorrectedYear(info, y) {
+  applyYear(info, y);
+  info.yearSongs = null;
+  info.yearEvents = null;
+  resetHints();
+  if (state.assists) prepareHints(info);
+  renderReveal(info);
+  fetchYearContext(info).then(function () {
+    if ($('#revealSheet').classList.contains('open')) renderReveal(info);
+  }).catch(function () { /* egal */ });
 }
 
 /* ============================================================
@@ -2109,6 +2227,7 @@ function bindEvents() {
   });
   $('#btnHint').addEventListener('click', onHintButton);
   $('#btnHintClose').addEventListener('click', hideHint);
+  $('#btnYearFix').addEventListener('click', onYearFix);
   $('#btnDiag').addEventListener('click', runDiagnose);
   $('#toggleAssists').addEventListener('click', function () {
     applyAssists(!state.assists, true);
