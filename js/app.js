@@ -39,7 +39,7 @@ var LS = {
   expires: 'rikster_expires',
   verifier: 'rikster_verifier',
   assists: 'rikster_assists',
-  yearfix: 'rikster_yearfix',
+  fixes: 'rikster_fixes',
   party: 'rikster_party'
 };
 
@@ -90,9 +90,24 @@ function openModal(opts) {
     inp.hidden = false;
     inp.value = opts.input.value || '';
     inp.placeholder = opts.input.placeholder || '';
+    inp.inputMode = opts.input.numeric ? 'numeric' : 'text';
   } else {
     inp.hidden = true;
     inp.value = '';
+  }
+  var ch = $('#modalChoices');
+  ch.innerHTML = '';
+  if (opts.choices && opts.choices.length) {
+    ch.hidden = false;
+    opts.choices.forEach(function (o) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = o.label;
+      b.addEventListener('click', function () { closeModal(); if (o.onPick) o.onPick(); });
+      ch.appendChild(b);
+    });
+  } else {
+    ch.hidden = true;
   }
   var p = $('#modalPrimary');
   var s = $('#modalSecondary');
@@ -767,17 +782,45 @@ function resolveHitsterCard(scan) {
    stimmt das Jahr nicht. Zwei Gegenmittel:
    1) Liegt der Karte kein Jahr bei, suchen wir die frueheste Fassung.
    2) Eigene Korrekturen ueberschreiben alles und bleiben gespeichert. */
-function yearFixAll() {
-  try { return JSON.parse(localStorage.getItem(LS.yearfix) || '{}') || {}; } catch (e) { return {}; }
+function fixAll() {
+  var raw = {};
+  try { raw = JSON.parse(localStorage.getItem(LS.fixes) || 'null') || {}; } catch (e) { raw = {}; }
+  if (!Object.keys(raw).length) {
+    /* frueheres Format: nur Jahreszahlen unter altem Schluessel */
+    try {
+      var alt = JSON.parse(localStorage.getItem('rikster_yearfix') || 'null') || {};
+      Object.keys(alt).forEach(function (k) {
+        if (typeof alt[k] === 'number') raw[k] = { year: alt[k] };
+        else if (alt[k]) raw[k] = alt[k];
+      });
+    } catch (e) { /* egal */ }
+  }
+  return raw;
 }
-function yearFixGet(trackId) {
-  var y = yearFixAll()[trackId];
-  return (typeof y === 'number' && isFinite(y)) ? y : null;
+function fixGet(trackId) {
+  var f = fixAll()[trackId];
+  return (f && typeof f === 'object') ? f : null;
 }
-function yearFixSet(trackId, year) {
-  var all = yearFixAll();
-  if (year === null) delete all[trackId]; else all[trackId] = year;
-  try { localStorage.setItem(LS.yearfix, JSON.stringify(all)); } catch (e) { toast('Konnte nicht gespeichert werden'); }
+function fixSet(trackId, feld, wert) {
+  var all = fixAll();
+  var eintrag = all[trackId] || {};
+  if (wert === null) delete eintrag[feld]; else eintrag[feld] = wert;
+  if (Object.keys(eintrag).length) all[trackId] = eintrag; else delete all[trackId];
+  try { localStorage.setItem(LS.fixes, JSON.stringify(all)); } catch (e) { toast('Konnte nicht gespeichert werden'); }
+}
+function fixClear(trackId) {
+  var all = fixAll();
+  delete all[trackId];
+  try { localStorage.setItem(LS.fixes, JSON.stringify(all)); } catch (e) { /* egal */ }
+}
+
+/* Gespeicherte Korrekturen auf einen Song anwenden */
+function applyFixes(info) {
+  var f = fixGet(info.id);
+  if (!f) return;
+  if (f.artist) info.artists = String(f.artist).split(/\s*,\s*/).filter(Boolean);
+  if (f.title) info.name = f.title;
+  if (f.year) applyYear(info, f.year);
 }
 
 function applyYear(info, y) {
@@ -855,8 +898,7 @@ function fetchTrackInfo(trackId, cardMeta) {
       }
     }
     return schritt.then(function () {
-      var fix = yearFixGet(trackId);
-      if (fix) applyYear(info, fix);
+      applyFixes(info);            /* eigene Korrekturen haben Vorrang */
       info.extras = fetchExtras(info);
       return info;
     });
@@ -1916,7 +1958,7 @@ function renderRevealLoading() {
   $('#revTitle').textContent = '\u00a0';
   $('#revCover').hidden = true;
   $('#revChips').innerHTML = '';
-  $('#btnYearFix').hidden = true;
+  $('#btnFix').hidden = true;
   $('#revSong').hidden = true;
   $('#revYearSongs').hidden = true;
   $('#revYearEvents').hidden = true;
@@ -1962,7 +2004,7 @@ function renderReveal(info) {
     return;
   }
   $('#revError').hidden = true;
-  $('#btnYearFix').hidden = false;
+  $('#btnFix').hidden = false;
   $('#revArtist').textContent = info.artists.join(', ');
   $('#revYear').textContent = info.year || '?';
   $('#revTitle').textContent = info.name;
@@ -2049,28 +2091,81 @@ function renderReveal(info) {
   }
 }
 
-function onYearFix() {
+function onFix() {
   var info = state.trackInfo;
   if (!info) { toast('Song-Infos sind noch nicht geladen'); return; }
-  var gespeichert = yearFixGet(info.id);
+  var f = fixGet(info.id) || {};
+  var choices = [
+    { label: 'Jahr korrigieren' + (f.year ? '  \u2713' : ''), onPick: function () { fixField('year'); } },
+    { label: 'Interpret korrigieren' + (f.artist ? '  \u2713' : ''), onPick: function () { fixField('artist'); } },
+    { label: 'Titel korrigieren' + (f.title ? '  \u2713' : ''), onPick: function () { fixField('title'); } }
+  ];
+  if (Object.keys(f).length) {
+    choices.push({
+      label: 'Alle Korrekturen zu diesem Song entfernen',
+      onPick: function () {
+        fixClear(info.id);
+        toast('Korrekturen entfernt \u2013 gilt ab dem n\u00e4chsten Scan');
+      }
+    });
+  }
   openModal({
-    title: 'Jahr korrigieren',
-    text: info.artists.join(', ') + ' \u2013 \u201e' + info.name + '\u201c\n\nWelches Jahr steht auf der Karte?',
-    input: { placeholder: 'z.\u202fB. 1984', value: info.year || '' },
+    title: 'Fehler gefunden',
+    text: info.artists.join(', ') + ' \u2013 \u201e' + info.name + '\u201c (' + (info.year || '?') + ')\n\nWas stimmt nicht?',
+    choices: choices,
+    primary: 'Abbrechen'
+  });
+}
+
+function fixField(feld) {
+  var info = state.trackInfo;
+  if (!info) return;
+  var gespeichert = (fixGet(info.id) || {})[feld];
+  var titel = feld === 'year' ? 'Jahr korrigieren' : (feld === 'artist' ? 'Interpret korrigieren' : 'Titel korrigieren');
+  var frage = feld === 'year' ? 'Welches Jahr steht auf der Karte?'
+    : (feld === 'artist' ? 'Wie hei\u00dft der Interpret richtig? Mehrere durch Komma trennen.'
+      : 'Wie hei\u00dft der Titel richtig?');
+  var wert = feld === 'year' ? (info.year || '') : (feld === 'artist' ? info.artists.join(', ') : info.name);
+  openModal({
+    title: titel,
+    text: frage,
+    input: { value: wert, numeric: feld === 'year', placeholder: feld === 'year' ? 'z.\u202fB. 1984' : '' },
     primary: 'Speichern',
     onPrimary: function (val) {
-      var y = parseInt(String(val || '').replace(/\D/g, ''), 10);
-      if (!isFinite(y) || y < 1900 || y > 2100) { toast('Bitte eine Jahreszahl zwischen 1900 und 2100'); return; }
-      yearFixSet(info.id, y);
-      setCorrectedYear(info, y);
-      toast('Jahr gespeichert \u2013 gilt ab jetzt auch beim n\u00e4chsten Scan');
+      var eingabe = String(val || '').trim();
+      if (feld === 'year') {
+        var y = parseInt(eingabe.replace(/\D/g, ''), 10);
+        if (!isFinite(y) || y < 1900 || y > 2100) { toast('Bitte eine Jahreszahl zwischen 1900 und 2100'); return; }
+        fixSet(info.id, 'year', y);
+        setCorrectedYear(info, y);
+      } else {
+        if (eingabe.length < 2) { toast('Bitte etwas mehr eintippen'); return; }
+        fixSet(info.id, feld, eingabe);
+        if (feld === 'artist') info.artists = eingabe.split(/\s*,\s*/).filter(Boolean);
+        else info.name = eingabe;
+        refreshExtras(info);
+      }
+      toast('Gespeichert \u2013 gilt ab jetzt auch beim n\u00e4chsten Scan');
     },
-    secondary: gespeichert ? 'Korrektur entfernen' : null,
-    onSecondary: gespeichert ? function () {
-      yearFixSet(info.id, null);
-      toast('Korrektur entfernt \u2013 beim n\u00e4chsten Scan gilt wieder das Jahr von Spotify');
+    secondary: gespeichert !== undefined ? 'Korrektur entfernen' : null,
+    onSecondary: gespeichert !== undefined ? function () {
+      fixSet(info.id, feld, null);
+      toast('Korrektur entfernt \u2013 beim n\u00e4chsten Scan gilt wieder die Angabe von Spotify');
     } : null
   });
+}
+
+/* Nach Korrektur von Interpret oder Titel: Zusatzinfos neu holen */
+function refreshExtras(info) {
+  ['genres', 'followers', 'label', 'wiki', 'country', 'language', 'chartPeak', 'chartWeeks',
+   'awards', 'sales', 'songfact', 'deArticle', 'enArticle', '_aw', '_sales'].forEach(function (k) {
+    delete info[k];
+  });
+  renderReveal(info);
+  info.extras = fetchExtras(info);
+  info.extras.then(function () {
+    if ($('#revealSheet').classList.contains('open')) renderReveal(info);
+  }).catch(function () { /* egal */ });
 }
 
 /* Korrigiertes Jahr sofort ueberall anwenden */
@@ -2227,7 +2322,7 @@ function bindEvents() {
   });
   $('#btnHint').addEventListener('click', onHintButton);
   $('#btnHintClose').addEventListener('click', hideHint);
-  $('#btnYearFix').addEventListener('click', onYearFix);
+  $('#btnFix').addEventListener('click', onFix);
   $('#btnDiag').addEventListener('click', runDiagnose);
   $('#toggleAssists').addEventListener('click', function () {
     applyAssists(!state.assists, true);

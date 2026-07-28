@@ -525,6 +525,14 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
   border-radius: 12px; color: var(--text); font-size: 15px; font-family: var(--body);
 }
 .modal-input:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+.modal-choices { display: grid; gap: 8px; margin-top: 16px; }
+.modal-choices button {
+  width: 100%; padding: 13px 14px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--text); font-size: 14.5px; font-family: var(--body); text-align: left;
+}
+.modal-choices button:active { border-color: var(--amber); color: var(--amber); }
+.modal-choices button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 /* Korrektur-Knopf am Ende der Auflösung */
 .yearfix {
   align-self: center; margin-top: 2px;
