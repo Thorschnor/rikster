@@ -507,4 +507,11 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
 
 /* Verbindungs-Check & Fußzeile */
 #modalText { white-space: pre-line; }
+.modal-input {
+  width: 100%; margin-top: 14px; padding: 12px 14px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 12px; color: var(--text); font-size: 15px;
+  font-family: var(--body);
+}
+.modal-input:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
 .home-links { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12.5px; }

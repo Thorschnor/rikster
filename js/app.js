@@ -33,6 +33,21 @@ var CORS_PROXIES = [
   'https://corsproxy.io/?url=',
   'https://api.codetabs.com/v1/proxy/?quest='
 ];
+/* Editionen, die in der Community-Datenbank fehlen, aber über
+   oeffentliche Spotify-Playlists in exakter Kartenreihenfolge
+   abgedeckt sind. Mehrere Listen werden aneinandergehängt:
+   Karte 141 ist der erste Titel der zweiten Liste usw. */
+var BUILTIN_EDITIONS = {
+  'de-aaaa0064': {
+    name: 'Hitster Battle of the Generations (DE)',
+    playlists: [
+      '3Iu58g8FnfLlJDxYYFMzjv', /* bis 1984      */
+      '4yHJNDpxusVlY5Yj0eRWAs', /* 1985–2004     */
+      '2jma16G4hx8VUy4Jkb9IEX'  /* 2005–2025     */
+    ]
+  }
+};
+
 var LS = {
   access: 'rikster_access',
   refresh: 'rikster_refresh',
@@ -84,10 +99,23 @@ function openModal(opts) {
   var m = $('#modal');
   $('#modalTitle').textContent = opts.title || '';
   $('#modalText').textContent = opts.text || '';
+  var inp = $('#modalInput');
+  if (opts.input) {
+    inp.hidden = false;
+    inp.value = opts.input.value || '';
+    inp.placeholder = opts.input.placeholder || '';
+  } else {
+    inp.hidden = true;
+    inp.value = '';
+  }
   var p = $('#modalPrimary');
   var s = $('#modalSecondary');
   p.textContent = opts.primary || 'OK';
-  p.onclick = function () { closeModal(); if (opts.onPrimary) opts.onPrimary(); };
+  p.onclick = function () {
+    var val = opts.input ? inp.value.trim() : undefined;
+    closeModal();
+    if (opts.onPrimary) opts.onPrimary(val);
+  };
   if (opts.secondary) {
     s.hidden = false;
     s.textContent = opts.secondary;
@@ -508,6 +536,53 @@ function parseCsv(text) {
   return rows;
 }
 
+/* Achtung: Jede Edition hat eine ANDERE Spaltenreihenfolge
+   (mal Artist vor Title, mal umgekehrt, Card# teils in der Mitte).
+   Deshalb werden die Spalten immer aus der Kopfzeile bestimmt. */
+function buildCardMap(text, lang) {
+  var rows = parseCsv(text);
+  var map = {};
+  if (!rows.length) return map;
+  var head = rows[0].map(function (h) {
+    return String(h || '').replace(/^\ufeff/, '').trim().toLowerCase();
+  });
+  function col() {
+    for (var a = 0; a < arguments.length; a++) {
+      var idx = head.indexOf(arguments[a]);
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  }
+  var iNum = col('card#', 'card #', 'card', 'nummer', 'nr');
+  var iArt = col('artist', 'interpret', 'k\u00fcnstler');
+  var iTit = col('title', 'titel');
+  var iYear = col('year', 'jahr', '\u00e9v', 'rok');
+  var iUrl = col('url', 'youtube-url', 'link');
+  var iIsrc = col('isrc');
+  /* Notfall: keine erkennbare Kopfzeile -> alte Annahme */
+  if (iNum === -1 || iArt === -1 || iTit === -1) {
+    iNum = 0; iArt = 1; iTit = 2; iUrl = 3; iYear = head.length - 1; iIsrc = -1;
+  }
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r || r.length < 3) continue;
+    var num = parseInt(r[iNum], 10);
+    if (!isFinite(num)) continue;
+    var year = (iYear !== -1) ? parseInt(r[iYear], 10) : NaN;
+    map[num] = {
+      artist: (r[iArt] || '').trim(),
+      title: (r[iTit] || '').trim(),
+      yt: (iUrl !== -1 ? (r[iUrl] || '').trim() : ''),
+      isrc: (iIsrc !== -1 ? (r[iIsrc] || '').trim() : ''),
+      year: isFinite(year) ? year : null
+    };
+  }
+if (lang) csvMemCache[lang] = map;
+return map;
+}
+
+
+
 function loadHitsterCsv(lang) {
   if (csvMemCache[lang]) return Promise.resolve(csvMemCache[lang]);
   var lsKey = 'rikster_hitcsv_' + lang;
@@ -515,31 +590,23 @@ function loadHitsterCsv(lang) {
   try { cached = JSON.parse(localStorage.getItem(lsKey) || 'null'); } catch (e) { cached = null; }
   var fresh = cached && (Date.now() - cached.t < 7 * 24 * 3600 * 1000);
 
-  function build(text) {
-    var rows = parseCsv(text);
-    var map = {};
-    for (var i = 1; i < rows.length; i++) { /* Zeile 0 = Kopf */
-      var r = rows[i];
-      if (!r || r.length < 3) continue;
-      var num = parseInt(r[0], 10);
-      if (!isFinite(num)) continue;
-      map[num] = {
-        artist: (r[1] || '').trim(),
-        title: (r[2] || '').trim(),
-        yt: (r[3] || '').trim(), /* YouTube-Link – Plan B für die Zuordnung */
-        year: parseInt(r[r.length - 1], 10) || null /* letzte Spalte = Jahr */
-      };
-    }
-    csvMemCache[lang] = map;
-    return map;
-  }
+  function build(text) { return buildCardMap(text, lang); }
 
   if (fresh) return Promise.resolve(build(cached.text));
 
-  return fetchWithTimeout(HITSTER_DB + 'hitster-' + lang + '.csv', 12000)
-    .then(function (res) {
-      if (!res.ok) throw { code: 'CSV_MISSING' };
+  function fetchCsv(url) {
+    return fetchWithTimeout(url, 12000).then(function (res) {
+      if (!res.ok) throw { code: (res.status === 404) ? 'CSV_MISSING' : 'CSV_NETWORK' };
       return res.text();
+    });
+  }
+
+  /* Erst die stets aktuelle Online-Datenbank, sonst die mitgelieferte
+     Sicherungskopie im Ordner data/ */
+  return fetchCsv(HITSTER_DB + 'hitster-' + lang + '.csv')
+    .catch(function (e1) {
+      console.warn('Online-Kartendatenbank nicht verf\u00fcgbar (' + ((e1 && e1.code) || e1) + ') \u2013 nutze lokales Backup');
+      return fetchCsv('data/hitster-' + lang + '.csv');
     })
     .then(function (text) {
       try { localStorage.setItem(lsKey, JSON.stringify({ t: Date.now(), text: text })); } catch (e) { /* Quota egal */ }
@@ -592,6 +659,18 @@ function mainArtist(artist) {
 }
 
 function searchSpotifyTrack(meta) {
+  /* Die ISRC ist die eindeutige Kennung einer Aufnahme - wenn die
+     Edition sie mitliefert, ist die Zuordnung damit exakt. */
+  if (meta.isrc && /^[A-Za-z0-9]{12}$/.test(meta.isrc)) {
+    return searchTracks('isrc:' + meta.isrc, 5).then(function (items) {
+      if (items.length) return items[0].id;
+      return searchByNameAndArtist(meta);
+    }).catch(function () { return searchByNameAndArtist(meta); });
+  }
+  return searchByNameAndArtist(meta);
+}
+
+function searchByNameAndArtist(meta) {
   var title = cleanTitle(meta.title);
   var main = mainArtist(meta.artist);
   var queries = [
@@ -677,7 +756,212 @@ function resolveViaOdesli(ytUrl) {
   });
 }
 
+/* ============================================================
+   UNBEKANNTE EDITIONEN: eigene Spotify-Playlist verknuepfen
+   ------------------------------------------------------------
+   Fuer Editionen, die in der Community-Datenbank fehlen (z. B.
+   "Battle of the Generations"), kann eine Playlist hinterlegt
+   werden, die alle Songs in Kartenreihenfolge enthaelt.
+   Karte N entspricht dann Titel N der Playlist. Weil das eine
+   Annahme ist, muss die Zuordnung einmal bestaetigt werden.
+   ============================================================ */
+function plKey(lang) { return 'rikster_pl_' + lang; }
+
+function loadPlaylistMap(lang) {
+  try { return JSON.parse(localStorage.getItem(plKey(lang)) || 'null'); } catch (e) { return null; }
+}
+function savePlaylistMap(lang, data) {
+  try { localStorage.setItem(plKey(lang), JSON.stringify(data)); } catch (e) { toast('Speicher voll - Playlist konnte nicht gesichert werden'); }
+}
+function dropPlaylistMap(lang) {
+  try { localStorage.removeItem(plKey(lang)); } catch (e) { /* egal */ }
+}
+
+function parsePlaylistIds(text) {
+  var out = [];
+  var re = /playlist[\/:]([A-Za-z0-9]{22})/g, m;
+  while ((m = re.exec(String(text || ''))) !== null) {
+    if (out.indexOf(m[1]) === -1) out.push(m[1]);
+  }
+  return out;
+}
+
+/* Mehrere Listen nacheinander laden und aneinanderh\u00e4ngen */
+function fetchPlaylistChain(ids) {
+  var all = [];
+  var chain = Promise.resolve();
+  ids.forEach(function (pid) {
+    chain = chain.then(function () {
+      return fetchPlaylistTracks(pid).then(function (tr) { all = all.concat(tr); });
+    });
+  });
+  return chain.then(function () { return all; });
+}
+
+/* Fest hinterlegte Edition beim ersten Scan laden und merken */
+function loadBuiltinEdition(lang) {
+  var def = BUILTIN_EDITIONS[lang];
+  if (!def) return Promise.resolve(null);
+  var existing = loadPlaylistMap(lang);
+  if (existing && existing.tracks && existing.tracks.length) return Promise.resolve(existing);
+  toast('Songliste f\u00fcr ' + def.name + ' wird geladen \u2026');
+  return fetchPlaylistChain(def.playlists).then(function (tracks) {
+    if (!tracks.length) throw { code: 'PL_EMPTY' };
+    var data = { id: def.playlists.join(','), tracks: tracks, offset: 0, verified: true, builtin: true };
+    savePlaylistMap(lang, data);
+    return data;
+  });
+}
+
+function fetchPlaylistTracks(pid) {
+  var out = [];
+  var fields = encodeURIComponent('items(track(id,name,artists(name),album(release_date)))');
+  function page(off) {
+    return api('/playlists/' + pid + '/tracks?limit=50&offset=' + off + '&fields=' + fields).then(function (res) {
+      if (!res.ok) {
+        return readApiError(res).then(function (d) { throw { code: 'PL_ERROR', detail: d }; });
+      }
+      return res.json();
+    }).then(function (j) {
+      var items = (j && j.items) || [];
+      items.forEach(function (it) {
+        var t = it && it.track;
+        if (!t || !t.id) return;
+        out.push({
+          tid: t.id,
+          artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
+          title: t.name,
+          year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
+        });
+      });
+      if (items.length === 50 && out.length < 1200) return page(off + 50);
+      return out;
+    });
+  }
+  return page(0);
+}
+
+function playlistCard(lang, num) {
+  var data = loadPlaylistMap(lang);
+  if (!data || !data.verified || !data.tracks) return null;
+  return data.tracks[num - 1 + (data.offset || 0)] || null;
+}
+
+function offerPlaylistLink(scan, onDone) {
+  openModal({
+    title: 'Edition nicht in der Datenbank',
+    text: 'Die Edition \u201e' + scan.lang + '\u201c (Karte ' + scan.num + ') ist in der Community-Datenbank nicht erfasst.\n\n' +
+      'Du kannst stattdessen eine Spotify-Playlist verkn\u00fcpfen, die alle Songs dieser Edition in der Reihenfolge der Kartennummern enth\u00e4lt. ' +
+      'Rikster ordnet dann Karte 1 dem ersten Titel zu, Karte 2 dem zweiten und so weiter.',
+    primary: 'Playlist verkn\u00fcpfen',
+    onPrimary: function () { askPlaylist(scan, onDone); },
+    secondary: 'Abbrechen',
+    onSecondary: onDone
+  });
+}
+
+function askPlaylist(scan, onDone) {
+  var existing = loadPlaylistMap(scan.lang);
+  openModal({
+    title: 'Playlist verkn\u00fcpfen',
+    text: 'F\u00fcge den Spotify-Link der Playlist ein (in Spotify: Teilen \u2192 Link kopieren).\n\nBesteht die Edition aus mehreren Stapeln, kannst du alle Links untereinander einf\u00fcgen \u2013 sie werden in dieser Reihenfolge aneinandergeh\u00e4ngt.',
+    input: { placeholder: 'https://open.spotify.com/playlist/\u2026', value: '' },
+    primary: 'Laden',
+    onPrimary: function (val) {
+      var pids = parsePlaylistIds(val);
+      if (!pids.length) {
+        openModal({
+          title: 'Link nicht erkannt',
+          text: 'Das sieht nicht nach einem Spotify-Playlist-Link aus. Er muss \u201eplaylist/\u201c und danach die Kennung enthalten.',
+          primary: 'Nochmal',
+          onPrimary: function () { askPlaylist(scan, onDone); },
+          secondary: 'Abbrechen',
+          onSecondary: onDone
+        });
+        return;
+      }
+      toast(pids.length > 1 ? 'Playlists werden geladen \u2026' : 'Playlist wird geladen \u2026');
+      fetchPlaylistChain(pids).then(function (tracks) {
+        if (!tracks.length) throw { code: 'PL_EMPTY' };
+        savePlaylistMap(scan.lang, { id: pids.join(','), tracks: tracks, offset: 0, verified: false });
+        verifyPlaylist(scan, onDone, tracks.length);
+      }).catch(function (e) {
+        openModal({
+          title: 'Playlist konnte nicht geladen werden',
+          text: (e && e.code === 'PL_EMPTY')
+            ? 'Die Playlist enth\u00e4lt keine abspielbaren Titel.'
+            : ('Bitte pr\u00fcfe den Link und deine Verbindung.' + (e && e.detail ? ' (Technik: ' + e.detail + ')' : '')),
+          primary: 'Nochmal',
+          onPrimary: function () { askPlaylist(scan, onDone); },
+          secondary: 'Abbrechen',
+          onSecondary: onDone
+        });
+      });
+    },
+    secondary: 'Abbrechen',
+    onSecondary: onDone
+  });
+}
+
+function verifyPlaylist(scan, onDone, total) {
+  var data = loadPlaylistMap(scan.lang);
+  if (!data) { if (onDone) onDone(); return; }
+  var t = data.tracks[scan.num - 1 + (data.offset || 0)];
+  if (!t) {
+    openModal({
+      title: 'Karte au\u00dferhalb der Playlist',
+      text: 'Die Playlist hat ' + (total || data.tracks.length) + ' Titel, die Karte tr\u00e4gt aber die Nummer ' + scan.num + '. Passt die Playlist wirklich zu dieser Edition?',
+      primary: 'Anderen Link versuchen',
+      onPrimary: function () { askPlaylist(scan, onDone); },
+      secondary: 'Verwerfen',
+      onSecondary: function () { dropPlaylistMap(scan.lang); if (onDone) onDone(); }
+    });
+    return;
+  }
+  openModal({
+    title: 'Bitte einmal pr\u00fcfen',
+    text: 'Die Playlist hat ' + (total || data.tracks.length) + ' Titel.\n\nKarte ' + scan.num + ' w\u00e4re demnach:\n\n' +
+      t.artist + ' \u2013 \u201e' + t.title + '\u201c' + (t.year ? ' (' + t.year + ')' : '') +
+      '\n\nSteht das so auf der R\u00fcckseite der Karte?',
+    primary: 'Ja, passt',
+    onPrimary: function () {
+      data.verified = true;
+      savePlaylistMap(scan.lang, data);
+      toast('Edition verkn\u00fcpft - die Karten funktionieren jetzt');
+      if (onDone) onDone();
+    },
+    secondary: 'Nein, passt nicht',
+    onSecondary: function () {
+      dropPlaylistMap(scan.lang);
+      openModal({
+        title: 'Playlist passt nicht',
+        text: 'Die Reihenfolge der Playlist stimmt nicht mit der Kartennummerierung \u00fcberein - sie wurde wieder entfernt. Eine andere Playlist kannst du jederzeit beim n\u00e4chsten Scan dieser Edition verkn\u00fcpfen.',
+        primary: 'OK',
+        onPrimary: onDone
+      });
+    }
+  });
+}
+
+function trackToMeta(t) {
+  return { artist: t.artist, title: t.title, year: t.year };
+}
+
 function resolveHitsterCard(scan) {
+  var pc = playlistCard(scan.lang, scan.num);
+  if (pc) return Promise.resolve({ id: pc.tid, meta: trackToMeta(pc) });
+
+  if (BUILTIN_EDITIONS[scan.lang]) {
+    return loadBuiltinEdition(scan.lang).then(function (data) {
+      var t = data && data.tracks && data.tracks[scan.num - 1];
+      if (!t) throw { code: 'CARD_UNKNOWN' };
+      return { id: t.tid, meta: trackToMeta(t) };
+    }).catch(function (err) {
+      if (err && err.code === 'CARD_UNKNOWN') throw err;
+      throw { code: 'CSV_NETWORK', detail: err && err.detail };
+    });
+  }
+
   return loadHitsterCsv(scan.lang).then(function (map) {
     var meta = map[scan.num];
     if (!meta || !meta.title) throw { code: 'CARD_UNKNOWN' };
@@ -1643,12 +1927,7 @@ function handleResolveError(err, scan) {
   setPlayerStatus('Pausiert');
   var code = err && err.code;
   if (code === 'CARD_UNKNOWN' || code === 'CSV_MISSING') {
-    openModal({
-      title: 'Karte nicht in der Datenbank',
-      text: 'Diese Edition (\u201e' + scan.lang + '\u201c, Karte ' + scan.num + ') ist in der Community-Datenbank noch nicht erfasst. Deine selbst erstellten Karten funktionieren nat\u00fcrlich weiterhin.',
-      primary: 'Neue Karte',
-      onPrimary: goScan
-    });
+    offerPlaylistLink(scan, function () { goScan(); });
     return;
   }
   if (code === 'NO_MATCH') {

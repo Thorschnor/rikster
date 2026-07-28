@@ -380,11 +380,7 @@ function utilityError(err, scan, purpose) {
   console.warn('party utility', err);
   var code = err && err.code;
   if (code === 'CARD_UNKNOWN' || code === 'CSV_MISSING') {
-    openModal({
-      title: 'Karte nicht in der Datenbank',
-      text: 'Diese Edition (\u201e' + scan.lang + '\u201c, Karte ' + scan.num + ') ist in der Community-Datenbank noch nicht erfasst. Nimm bitte eine andere Karte.',
-      primary: 'OK'
-    });
+    offerPlaylistLink(scan, function () { partyScan(purpose); });
     return;
   }
   if (code === 'NO_MATCH') {
