@@ -156,7 +156,13 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; background
 }
 .mode-badge { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); opacity: .9; }
 .user-line b { color: var(--text); font-weight: 600; }
-.footnote { color: var(--muted); font-size: 13px; }
+.footnote { color: var(--muted); font-size: 13px; text-align: center; line-height: 1.55; }
+/* Hinweis unter "Mit Spotify verbinden": zentriert am unteren Rand */
+#screen-auth .footnote {
+  position: absolute; left: 24px; right: 24px;
+  bottom: calc(var(--sab) + 20px);
+  margin: 0;
+}
 
 /* ---------- Scanner ---------- */
 .screen-scanner { padding: 0; background: #000; }

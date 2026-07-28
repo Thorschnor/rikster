@@ -815,30 +815,50 @@ function loadBuiltinEdition(lang) {
 
 function fetchPlaylistTracks(pid) {
   var out = [];
-  var fields = encodeURIComponent('items(track(id,name,artists(name),album(release_date)))');
-  function page(off) {
-    return api('/playlists/' + pid + '/tracks?limit=50&offset=' + off + '&fields=' + fields).then(function (res) {
+  var seen = 0;
+  var FIELDS = 'items(track(id,name,artists(name),album(release_date)))';
+
+  function page(off, useFields) {
+    var url = '/playlists/' + pid + '/tracks?limit=50&offset=' + off + searchMarket() +
+      (useFields ? ('&fields=' + encodeURIComponent(FIELDS)) : '');
+    return api(url).then(function (res) {
       if (!res.ok) {
-        return readApiError(res).then(function (d) { throw { code: 'PL_ERROR', detail: d }; });
-      }
-      return res.json();
-    }).then(function (j) {
-      var items = (j && j.items) || [];
-      items.forEach(function (it) {
-        var t = it && it.track;
-        if (!t || !t.id) return;
-        out.push({
-          tid: t.id,
-          artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
-          title: t.name,
-          year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
+        return readApiError(res).then(function (d) {
+          /* Manche Spotify-Versionen mögen den Feldfilter nicht – ohne ihn nochmal probieren */
+          if (useFields) {
+            console.warn('Playlist-Abruf mit Feldfilter fehlgeschlagen (' + d + ') \u2013 erneut ohne Filter');
+            return page(off, false);
+          }
+          throw { code: 'PL_ERROR', detail: d + ' [Liste ' + pid + ']' };
         });
+      }
+      return res.json().then(function (j) {
+        var items = (j && j.items) || [];
+        seen += items.length;
+        items.forEach(function (it) {
+          var t = it && it.track;
+          if (!t || !t.id) return;
+          out.push({
+            tid: t.id,
+            artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
+            title: t.name,
+            year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
+          });
+        });
+        if (items.length === 50 && out.length < 1500) return page(off + 50, useFields);
+        if (!out.length) {
+          throw {
+            code: 'PL_EMPTY',
+            detail: seen
+              ? (seen + ' Eintr\u00e4ge gefunden, aber keiner abrufbar [Liste ' + pid + ']')
+              : ('Liste ist leer oder nicht \u00f6ffentlich [Liste ' + pid + ']')
+          };
+        }
+        return out;
       });
-      if (items.length === 50 && out.length < 1200) return page(off + 50);
-      return out;
     });
   }
-  return page(0);
+  return page(0, true);
 }
 
 function playlistCard(lang, num) {
@@ -958,7 +978,7 @@ function resolveHitsterCard(scan) {
       return { id: t.tid, meta: trackToMeta(t) };
     }).catch(function (err) {
       if (err && err.code === 'CARD_UNKNOWN') throw err;
-      throw { code: 'CSV_NETWORK', detail: err && err.detail };
+      throw { code: 'BUILTIN_FAIL', detail: (err && (err.detail || err.code)) || String(err) };
     });
   }
 
@@ -1940,10 +1960,24 @@ function handleResolveError(err, scan) {
     });
     return;
   }
+  if (code === 'BUILTIN_FAIL') {
+    openModal({
+      title: 'Songliste nicht ladbar',
+      text: 'Die f\u00fcr diese Edition hinterlegten Spotify-Playlists konnten nicht geladen werden.' +
+        (err.detail ? '\n\nTechnik: ' + err.detail : '') +
+        '\n\nDu kannst stattdessen eigene Playlist-Links verkn\u00fcpfen.',
+      primary: 'Erneut versuchen',
+      onPrimary: function () { onScanned(scan); },
+      secondary: 'Playlists selbst verkn\u00fcpfen',
+      onSecondary: function () { offerPlaylistLink(scan, goScan); }
+    });
+    return;
+  }
   if (err && err.message === 'not-logged-in') { showScreen('screen-auth'); return; }
   openModal({
     title: 'Zuordnung fehlgeschlagen',
-    text: 'Die Karten-Datenbank konnte nicht geladen werden. Pr\u00fcfe deine Internetverbindung.',
+    text: 'Die Karten-Datenbank konnte nicht geladen werden.' +
+      (err && err.detail ? '\n\nTechnik: ' + err.detail : ' Pr\u00fcfe deine Internetverbindung.'),
     primary: 'Erneut versuchen',
     onPrimary: function () { onScanned(scan); },
     secondary: 'Neue Karte',
@@ -2274,6 +2308,10 @@ function runDiagnose() {
     return check('Profil (/me)', '/me')
       .then(function () { return check('Song-Abruf (Testsong)', '/tracks/3n3Ppam7vgaVa1iaRUc9Lp'); })
       .then(function () { return check('Suche', '/search?type=track&limit=5&q=test'); })
+      .then(function () {
+        var ids = BUILTIN_EDITIONS['de-aaaa0064'].playlists;
+        return check('Playlist-Abruf (Battle of the Generations)', '/playlists/' + ids[0] + '/tracks?limit=1');
+      })
       .then(function () {
         return api('/me/player/devices').then(function (res) {
           if (!res.ok) return readApiError(res).then(function (d) { lines.push('\u274c Ger\u00e4te: ' + d); });
