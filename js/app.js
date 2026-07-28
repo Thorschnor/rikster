@@ -25,7 +25,7 @@
 var CFG = window.RIKSTER_CONFIG || {};
 var CLIENT_ID = String(CFG.SPOTIFY_CLIENT_ID || '').trim();
 var REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
-var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative';
+var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
 var API_BASE = 'https://api.spotify.com/v1';
 var HITSTER_DB = 'https://raw.githubusercontent.com/andygruber/songseeker-hitster-playlists/main/';
 var CORS_PROXIES = [
@@ -33,21 +33,6 @@ var CORS_PROXIES = [
   'https://corsproxy.io/?url=',
   'https://api.codetabs.com/v1/proxy/?quest='
 ];
-/* Editionen, die in der Community-Datenbank fehlen, aber über
-   oeffentliche Spotify-Playlists in exakter Kartenreihenfolge
-   abgedeckt sind. Mehrere Listen werden aneinandergehängt:
-   Karte 141 ist der erste Titel der zweiten Liste usw. */
-var BUILTIN_EDITIONS = {
-  'de-aaaa0064': {
-    name: 'Hitster Battle of the Generations (DE)',
-    playlists: [
-      '3Iu58g8FnfLlJDxYYFMzjv', /* bis 1984      */
-      '4yHJNDpxusVlY5Yj0eRWAs', /* 1985–2004     */
-      '2jma16G4hx8VUy4Jkb9IEX'  /* 2005–2025     */
-    ]
-  }
-};
-
 var LS = {
   access: 'rikster_access',
   refresh: 'rikster_refresh',
@@ -99,23 +84,10 @@ function openModal(opts) {
   var m = $('#modal');
   $('#modalTitle').textContent = opts.title || '';
   $('#modalText').textContent = opts.text || '';
-  var inp = $('#modalInput');
-  if (opts.input) {
-    inp.hidden = false;
-    inp.value = opts.input.value || '';
-    inp.placeholder = opts.input.placeholder || '';
-  } else {
-    inp.hidden = true;
-    inp.value = '';
-  }
   var p = $('#modalPrimary');
   var s = $('#modalSecondary');
   p.textContent = opts.primary || 'OK';
-  p.onclick = function () {
-    var val = opts.input ? inp.value.trim() : undefined;
-    closeModal();
-    if (opts.onPrimary) opts.onPrimary(val);
-  };
+  p.onclick = function () { closeModal(); if (opts.onPrimary) opts.onPrimary(); };
   if (opts.secondary) {
     s.hidden = false;
     s.textContent = opts.secondary;
@@ -227,7 +199,6 @@ function login() {
 }
 
 function saveTokens(data) {
-  if (data.scope) { try { localStorage.setItem('rikster_scopes', data.scope); } catch (e) { /* egal */ } }
   if (data.access_token) localStorage.setItem(LS.access, data.access_token);
   if (data.refresh_token) localStorage.setItem(LS.refresh, data.refresh_token);
   var ttl = (data.expires_in || 3600) - 60;
@@ -283,21 +254,6 @@ function ensureToken() {
     });
   }
   return Promise.reject(new Error('not-logged-in'));
-}
-
-function hasPlaylistScope() {
-  var s = '';
-  try { s = localStorage.getItem('rikster_scopes') || ''; } catch (e) { /* egal */ }
-  return s.indexOf('playlist-read-private') !== -1;
-}
-
-/* Ein aufgefrischtes Token behaelt die alten Berechtigungen -
-   fuer neue Rechte ist eine komplett neue Anmeldung noetig. */
-function reauthorize() {
-  localStorage.removeItem(LS.access);
-  localStorage.removeItem(LS.refresh);
-  localStorage.removeItem(LS.expires);
-  login();
 }
 
 function isLoggedIn() {
@@ -772,304 +728,7 @@ function resolveViaOdesli(ytUrl) {
   });
 }
 
-/* ============================================================
-   UNBEKANNTE EDITIONEN: eigene Spotify-Playlist verknuepfen
-   ------------------------------------------------------------
-   Fuer Editionen, die in der Community-Datenbank fehlen (z. B.
-   "Battle of the Generations"), kann eine Playlist hinterlegt
-   werden, die alle Songs in Kartenreihenfolge enthaelt.
-   Karte N entspricht dann Titel N der Playlist. Weil das eine
-   Annahme ist, muss die Zuordnung einmal bestaetigt werden.
-   ============================================================ */
-function plKey(lang) { return 'rikster_pl_' + lang; }
-
-function loadPlaylistMap(lang) {
-  try { return JSON.parse(localStorage.getItem(plKey(lang)) || 'null'); } catch (e) { return null; }
-}
-function savePlaylistMap(lang, data) {
-  try { localStorage.setItem(plKey(lang), JSON.stringify(data)); } catch (e) { toast('Speicher voll - Playlist konnte nicht gesichert werden'); }
-}
-function dropPlaylistMap(lang) {
-  try { localStorage.removeItem(plKey(lang)); } catch (e) { /* egal */ }
-}
-
-function parsePlaylistIds(text) {
-  var out = [];
-  var re = /playlist[\/:]([A-Za-z0-9]{22})/g, m;
-  while ((m = re.exec(String(text || ''))) !== null) {
-    if (out.indexOf(m[1]) === -1) out.push(m[1]);
-  }
-  return out;
-}
-
-/* Mehrere Listen nacheinander laden und aneinanderh\u00e4ngen */
-function fetchPlaylistChain(ids) {
-  var all = [];
-  var chain = Promise.resolve();
-  ids.forEach(function (pid) {
-    chain = chain.then(function () {
-      return fetchPlaylistTracks(pid).then(function (tr) { all = all.concat(tr); });
-    });
-  });
-  return chain.then(function () { return all; });
-}
-
-/* Fest hinterlegte Edition beim ersten Scan laden und merken */
-function loadBuiltinEdition(lang) {
-  var def = BUILTIN_EDITIONS[lang];
-  if (!def) return Promise.resolve(null);
-  var existing = loadPlaylistMap(lang);
-  if (existing && existing.tracks && existing.tracks.length) return Promise.resolve(existing);
-  toast('Songliste f\u00fcr ' + def.name + ' wird geladen \u2026');
-  return fetchPlaylistChain(def.playlists).then(function (tracks) {
-    if (!tracks.length) throw { code: 'PL_EMPTY' };
-    var data = { id: def.playlists.join(','), tracks: tracks, offset: 0, verified: true, builtin: true };
-    savePlaylistMap(lang, data);
-    return data;
-  });
-}
-
-/* Spotify hat im Februar 2026 /tracks durch /items ersetzt und liefert
-   fuer Playlist-Inhalte haeufig 403. Deshalb drei Wege nacheinander:
-   1) neuer Endpunkt /items  2) alter Endpunkt /tracks
-   3) oeffentliche Embed-Seite ueber einen CORS-Proxy auslesen und die
-      Titel-Daten einzeln ueber /tracks nachladen. */
-function fetchPlaylistTracks(pid) {
-  return fetchPlaylistViaApi(pid, 'items').catch(function (e1) {
-    console.warn('Playlist ueber /items fehlgeschlagen', e1 && e1.detail);
-    return fetchPlaylistViaApi(pid, 'tracks').catch(function (e2) {
-      console.warn('Playlist ueber /tracks fehlgeschlagen', e2 && e2.detail);
-      return fetchPlaylistViaEmbed(pid).catch(function (e3) {
-        console.warn('Playlist ueber Embed-Seite fehlgeschlagen', e3);
-        throw e2;
-      });
-    });
-  });
-}
-
-function trackFromItem(it) {
-  var t = it && (it.track || it.item);
-  if (!t && it && it.id && it.name) t = it;
-  if (!t || !t.id) return null;
-  return {
-    tid: t.id,
-    artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
-    title: t.name,
-    year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
-  };
-}
-
-function fetchPlaylistViaApi(pid, kind) {
-  var out = [];
-  var seen = 0;
-  function page(off) {
-    var url = '/playlists/' + pid + '/' + kind + '?limit=50&offset=' + off + searchMarket();
-    return api(url).then(function (res) {
-      if (!res.ok) {
-        return readApiError(res).then(function (d) {
-          throw { code: 'PL_ERROR', status: res.status, detail: d + ' [' + kind + ', Liste ' + pid + ']' };
-        });
-      }
-      return res.json().then(function (j) {
-        var items = (j && j.items) || [];
-        seen += items.length;
-        items.forEach(function (it) {
-          var t = trackFromItem(it);
-          if (t) out.push(t);
-        });
-        if (items.length === 50 && out.length < 1500) return page(off + 50);
-        if (!out.length) {
-          throw {
-            code: 'PL_EMPTY',
-            detail: seen ? (seen + ' Eintraege, aber keiner lesbar') : ('Liste leer oder nicht oeffentlich [Liste ' + pid + ']')
-          };
-        }
-        return out;
-      });
-    });
-  }
-  return page(0);
-}
-
-/* Notweg ohne Playlist-Schnittstelle: die oeffentliche Embed-Seite
-   enthaelt die Titelreihenfolge, die Daten holen wir per /tracks. */
-function fetchPlaylistViaEmbed(pid) {
-  return proxyFetch('https://open.spotify.com/embed/playlist/' + pid).then(function (html) {
-    var ids = [];
-    var m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-    if (m) {
-      try {
-        var found = null;
-        (function dig(node, depth) {
-          if (found || !node || depth > 12 || typeof node !== 'object') return;
-          if (Array.isArray(node.trackList)) { found = node.trackList; return; }
-          Object.keys(node).forEach(function (k) { dig(node[k], depth + 1); });
-        })(JSON.parse(m[1]), 0);
-        if (found) {
-          found.forEach(function (t) {
-            var mm = String(t && t.uri || '').match(/track:([A-Za-z0-9]{22})/);
-            if (mm) ids.push(mm[1]);
-          });
-        }
-      } catch (e) { /* weiter unten Notfallmuster */ }
-    }
-    if (!ids.length) {
-      var re = /spotify:track:([A-Za-z0-9]{22})/g, mm2;
-      while ((mm2 = re.exec(html)) !== null) ids.push(mm2[1]);
-    }
-    if (!ids.length) throw { code: 'PL_EMBED_EMPTY' };
-    return enrichTrackIds(ids);
-  });
-}
-
-/* Titel-Infos in Bloecken zu 50 nachladen (Reihenfolge bleibt erhalten) */
-function enrichTrackIds(ids) {
-  var out = [];
-  function block(i) {
-    if (i >= ids.length) return Promise.resolve(out);
-    var part = ids.slice(i, i + 50);
-    return api('/tracks?ids=' + part.join(',') + searchMarket()).then(function (res) {
-      if (!res.ok) {
-        return readApiError(res).then(function (d) { throw { code: 'PL_ERROR', detail: d + ' [Titel-Abruf]' }; });
-      }
-      return res.json();
-    }).then(function (j) {
-      (j && j.tracks || []).forEach(function (t) {
-        if (!t || !t.id) { out.push({ tid: null, artist: '?', title: '?', year: null }); return; }
-        out.push({
-          tid: t.id,
-          artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
-          title: t.name,
-          year: parseInt(String((t.album && t.album.release_date) || '').slice(0, 4), 10) || null
-        });
-      });
-      return block(i + 50);
-    });
-  }
-  return block(0);
-}
-
-function playlistCard(lang, num) {
-  var data = loadPlaylistMap(lang);
-  if (!data || !data.verified || !data.tracks) return null;
-  return data.tracks[num - 1 + (data.offset || 0)] || null;
-}
-
-function offerPlaylistLink(scan, onDone) {
-  openModal({
-    title: 'Edition nicht in der Datenbank',
-    text: 'Die Edition \u201e' + scan.lang + '\u201c (Karte ' + scan.num + ') ist in der Community-Datenbank nicht erfasst.\n\n' +
-      'Du kannst stattdessen eine Spotify-Playlist verkn\u00fcpfen, die alle Songs dieser Edition in der Reihenfolge der Kartennummern enth\u00e4lt. ' +
-      'Rikster ordnet dann Karte 1 dem ersten Titel zu, Karte 2 dem zweiten und so weiter.',
-    primary: 'Playlist verkn\u00fcpfen',
-    onPrimary: function () { askPlaylist(scan, onDone); },
-    secondary: 'Abbrechen',
-    onSecondary: onDone
-  });
-}
-
-function askPlaylist(scan, onDone) {
-  var existing = loadPlaylistMap(scan.lang);
-  openModal({
-    title: 'Playlist verkn\u00fcpfen',
-    text: 'F\u00fcge den Spotify-Link der Playlist ein (in Spotify: Teilen \u2192 Link kopieren).\n\nBesteht die Edition aus mehreren Stapeln, kannst du alle Links untereinander einf\u00fcgen \u2013 sie werden in dieser Reihenfolge aneinandergeh\u00e4ngt.',
-    input: { placeholder: 'https://open.spotify.com/playlist/\u2026', value: '' },
-    primary: 'Laden',
-    onPrimary: function (val) {
-      var pids = parsePlaylistIds(val);
-      if (!pids.length) {
-        openModal({
-          title: 'Link nicht erkannt',
-          text: 'Das sieht nicht nach einem Spotify-Playlist-Link aus. Er muss \u201eplaylist/\u201c und danach die Kennung enthalten.',
-          primary: 'Nochmal',
-          onPrimary: function () { askPlaylist(scan, onDone); },
-          secondary: 'Abbrechen',
-          onSecondary: onDone
-        });
-        return;
-      }
-      toast(pids.length > 1 ? 'Playlists werden geladen \u2026' : 'Playlist wird geladen \u2026');
-      fetchPlaylistChain(pids).then(function (tracks) {
-        if (!tracks.length) throw { code: 'PL_EMPTY' };
-        savePlaylistMap(scan.lang, { id: pids.join(','), tracks: tracks, offset: 0, verified: false });
-        verifyPlaylist(scan, onDone, tracks.length);
-      }).catch(function (e) {
-        openModal({
-          title: 'Playlist konnte nicht geladen werden',
-          text: (e && e.code === 'PL_EMPTY')
-            ? 'Die Playlist enth\u00e4lt keine abspielbaren Titel.'
-            : ('Bitte pr\u00fcfe den Link und deine Verbindung.' + (e && e.detail ? ' (Technik: ' + e.detail + ')' : '')),
-          primary: 'Nochmal',
-          onPrimary: function () { askPlaylist(scan, onDone); },
-          secondary: 'Abbrechen',
-          onSecondary: onDone
-        });
-      });
-    },
-    secondary: 'Abbrechen',
-    onSecondary: onDone
-  });
-}
-
-function verifyPlaylist(scan, onDone, total) {
-  var data = loadPlaylistMap(scan.lang);
-  if (!data) { if (onDone) onDone(); return; }
-  var t = data.tracks[scan.num - 1 + (data.offset || 0)];
-  if (!t) {
-    openModal({
-      title: 'Karte au\u00dferhalb der Playlist',
-      text: 'Die Playlist hat ' + (total || data.tracks.length) + ' Titel, die Karte tr\u00e4gt aber die Nummer ' + scan.num + '. Passt die Playlist wirklich zu dieser Edition?',
-      primary: 'Anderen Link versuchen',
-      onPrimary: function () { askPlaylist(scan, onDone); },
-      secondary: 'Verwerfen',
-      onSecondary: function () { dropPlaylistMap(scan.lang); if (onDone) onDone(); }
-    });
-    return;
-  }
-  openModal({
-    title: 'Bitte einmal pr\u00fcfen',
-    text: 'Die Playlist hat ' + (total || data.tracks.length) + ' Titel.\n\nKarte ' + scan.num + ' w\u00e4re demnach:\n\n' +
-      t.artist + ' \u2013 \u201e' + t.title + '\u201c' + (t.year ? ' (' + t.year + ')' : '') +
-      '\n\nSteht das so auf der R\u00fcckseite der Karte?',
-    primary: 'Ja, passt',
-    onPrimary: function () {
-      data.verified = true;
-      savePlaylistMap(scan.lang, data);
-      toast('Edition verkn\u00fcpft - die Karten funktionieren jetzt');
-      if (onDone) onDone();
-    },
-    secondary: 'Nein, passt nicht',
-    onSecondary: function () {
-      dropPlaylistMap(scan.lang);
-      openModal({
-        title: 'Playlist passt nicht',
-        text: 'Die Reihenfolge der Playlist stimmt nicht mit der Kartennummerierung \u00fcberein - sie wurde wieder entfernt. Eine andere Playlist kannst du jederzeit beim n\u00e4chsten Scan dieser Edition verkn\u00fcpfen.',
-        primary: 'OK',
-        onPrimary: onDone
-      });
-    }
-  });
-}
-
-function trackToMeta(t) {
-  return { artist: t.artist, title: t.title, year: t.year };
-}
-
 function resolveHitsterCard(scan) {
-  var pc = playlistCard(scan.lang, scan.num);
-  if (pc) return Promise.resolve({ id: pc.tid, meta: trackToMeta(pc) });
-
-  if (BUILTIN_EDITIONS[scan.lang]) {
-    return loadBuiltinEdition(scan.lang).then(function (data) {
-      var t = data && data.tracks && data.tracks[scan.num - 1];
-      if (!t) throw { code: 'CARD_UNKNOWN' };
-      return { id: t.tid, meta: trackToMeta(t) };
-    }).catch(function (err) {
-      if (err && err.code === 'CARD_UNKNOWN') throw err;
-      throw { code: 'BUILTIN_FAIL', detail: (err && (err.detail || err.code)) || String(err) };
-    });
-  }
-
   return loadHitsterCsv(scan.lang).then(function (map) {
     var meta = map[scan.num];
     if (!meta || !meta.title) throw { code: 'CARD_UNKNOWN' };
@@ -2035,7 +1694,12 @@ function handleResolveError(err, scan) {
   setPlayerStatus('Pausiert');
   var code = err && err.code;
   if (code === 'CARD_UNKNOWN' || code === 'CSV_MISSING') {
-    offerPlaylistLink(scan, function () { goScan(); });
+    openModal({
+      title: 'Karte nicht in der Datenbank',
+      text: 'Diese Edition (\u201e' + scan.lang + '\u201c, Karte ' + scan.num + ') ist in der Kartendatenbank nicht erfasst. Deine selbst erstellten Karten funktionieren nat\u00fcrlich weiterhin.',
+      primary: 'Neue Karte',
+      onPrimary: goScan
+    });
     return;
   }
   if (code === 'NO_MATCH') {
@@ -2045,33 +1709,6 @@ function handleResolveError(err, scan) {
       text: 'Die Karte wurde erkannt (' + (meta.artist || '?') + ' \u2013 \u201e' + (meta.title || '?') + '\u201c), aber bei Spotify wurde kein passender Song gefunden.' + (err.diag ? ' (Technik: Suche meldete ' + err.diag + ')' : ' (Suche lieferte 0 Treffer)'),
       primary: 'Neue Karte',
       onPrimary: goScan
-    });
-    return;
-  }
-  if (code === 'BUILTIN_FAIL') {
-    var is403 = /\b403\b/.test(String(err.detail || ''));
-    if (is403 && !hasPlaylistScope()) {
-      openModal({
-        title: 'Berechtigung fehlt',
-        text: 'Spotify verweigert den Zugriff auf Playlists (403).\n\nRikster braucht daf\u00fcr eine zus\u00e4tzliche Berechtigung, die es bei deiner Anmeldung noch nicht gab. Melde dich einmal neu an \u2013 danach sollte es klappen.' +
-          (err.detail ? '\n\nTechnik: ' + err.detail : ''),
-        primary: 'Jetzt neu anmelden',
-        onPrimary: reauthorize,
-        secondary: 'Sp\u00e4ter',
-        onSecondary: goScan
-      });
-      return;
-    }
-    openModal({
-      title: 'Songliste nicht ladbar',
-      text: 'Die f\u00fcr diese Edition hinterlegten Spotify-Playlists konnten nicht geladen werden.' +
-        (err.detail ? '\n\nTechnik: ' + err.detail : '') +
-        (is403 ? '\n\nSpotify sperrt seit dem Februar-Umbau bei manchen Konten das Auslesen von Playlists \u00fcber die Schnittstelle.' : '') +
-        '\n\nDu kannst stattdessen eigene Playlist-Links verkn\u00fcpfen.',
-      primary: 'Erneut versuchen',
-      onPrimary: function () { onScanned(scan); },
-      secondary: 'Playlists selbst verkn\u00fcpfen',
-      onSecondary: function () { offerPlaylistLink(scan, goScan); }
     });
     return;
   }
@@ -2410,20 +2047,6 @@ function runDiagnose() {
     return check('Profil (/me)', '/me')
       .then(function () { return check('Song-Abruf (Testsong)', '/tracks/3n3Ppam7vgaVa1iaRUc9Lp'); })
       .then(function () { return check('Suche', '/search?type=track&limit=5&q=test'); })
-      .then(function () {
-        var ids = BUILTIN_EDITIONS['de-aaaa0064'].playlists;
-        return check('Playlist-Abruf neu (/items)', '/playlists/' + ids[0] + '/items?limit=1')
-          .then(function (ok) {
-            if (ok) return true;
-            return check('Playlist-Abruf alt (/tracks)', '/playlists/' + ids[0] + '/tracks?limit=1');
-          })
-          .then(function (ok) {
-            if (!ok && !hasPlaylistScope()) {
-              lines.push('\u2139\ufe0f Deiner Anmeldung fehlt die Playlist-Berechtigung \u2013 einmal abmelden und neu anmelden.');
-            }
-            return ok;
-          });
-      })
       .then(function () {
         return api('/me/player/devices').then(function (res) {
           if (!res.ok) return readApiError(res).then(function (d) { lines.push('\u274c Ger\u00e4te: ' + d); });
