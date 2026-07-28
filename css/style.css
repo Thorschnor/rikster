@@ -315,9 +315,15 @@ body.assists-off .player-actions { grid-template-columns: 1fr; }
 
 .cover { width: 150px; border-radius: 14px; box-shadow: 0 14px 36px rgba(0,0,0,.5); }
 
-.chips { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: min(88vw, 380px); }
+/* dense: spätere kleine Kacheln füllen Lücken auf, die eine breite
+   Kachel hinterlassen hätte - so stehen kleine Kacheln immer paarweise */
+.chips {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  grid-auto-flow: row dense; align-items: stretch;
+  width: min(88vw, 380px);
+}
 .chip { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 11px 13px; }
-.chip.wide { grid-column: 1 / -1; }
+.chip.wide, .chip.stretch { grid-column: 1 / -1; }
 .chip .k { display: block; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
 .chip .v { font-size: 14.5px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
 

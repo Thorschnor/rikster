@@ -1859,6 +1859,18 @@ function addChip(container, label, value, wide) {
   container.appendChild(chip);
 }
 
+/* Bleibt am Ende eine halbe Zeile übrig, wird die letzte kleine Kachel
+   auf volle Breite gezogen - dann gibt es nirgends eine Lücke. */
+function balanceChips(container) {
+  var all = container.querySelectorAll('.chip');
+  var small = [];
+  for (var i = 0; i < all.length; i++) {
+    all[i].classList.remove('stretch');
+    if (!all[i].classList.contains('wide')) small.push(all[i]);
+  }
+  if (small.length % 2 === 1) small[small.length - 1].classList.add('stretch');
+}
+
 function renderReveal(info) {
   if (!info) {
     $('#revArtist').textContent = 'Hoppla';
@@ -1900,6 +1912,7 @@ function renderReveal(info) {
   if (info.genres && info.genres.length) {
     addChip(chips, 'Musikgenre', info.genres.slice(0, 3).join(', '), true);
   }
+  balanceChips(chips);
 
   var songBox = $('#revSong');
   if (info.songfact && info.songfact.text) {
