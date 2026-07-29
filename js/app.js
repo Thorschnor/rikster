@@ -189,6 +189,17 @@ function cleanTitle(t) {
     .trim();
 }
 function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+/* n zufällige Elemente ziehen, ohne Wiederholung */
+function pickN(arr, n) {
+  if (!arr || !arr.length) return [];
+  var a = arr.slice();
+  var out = [];
+  while (a.length && out.length < n) {
+    out.push(a.splice(Math.floor(Math.random() * a.length), 1)[0]);
+  }
+  return out;
+}
 function fetchWithTimeout(url, ms, opts) {
   var ctrl = ('AbortController' in window) ? new AbortController() : null;
   var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, ms) : null;
@@ -896,18 +907,22 @@ function fetchTrackInfo(trackId, cardMeta) {
     };
     /* Bei offiziellen Karten gilt das Jahr der Karte – Spotify listet
        oft Remaster/Compilations mit späterem Datum. */
+    var korrektur = fixGet(trackId) || {};
     var schritt = Promise.resolve();
     if (cardMeta) {
       info.cardArtist = cardMeta.artist;
       if (cardMeta.year) {
         applyYear(info, cardMeta.year);
-      } else {
-        /* Karte ohne Jahresangabe: frueheste Fassung suchen */
-        schritt = findOriginalYear(cardMeta.artist || info.artists[0], cardMeta.title || info.name)
-          .then(function (y) {
-            var sy = parseInt(info.year, 10);
-            if (y && (!isFinite(sy) || y < sy)) applyYear(info, y);
-          });
+      } else if (!korrektur.year) {
+        /* Karte ohne Jahresangabe: frueheste Fassung suchen.
+           Bei eigener Jahreskorrektur entfaellt die Suche komplett. */
+        schritt = findOriginalYear(
+          korrektur.artist || cardMeta.artist || info.artists[0],
+          korrektur.title || cardMeta.title || info.name
+        ).then(function (y) {
+          var sy = parseInt(info.year, 10);
+          if (y && (!isFinite(sy) || y < sy)) applyYear(info, y);
+        });
       }
     }
     return schritt.then(function () {
@@ -1504,9 +1519,7 @@ function prepareHints(info) {
        alle übrigen Plätze sind zufällige Ereignisse – es können
        also auch drei Ereignisse sein. */
     var useSong = Boolean(songHint) && Math.random() < 0.5;
-    var list = pickN(pool, useSong ? 2 : 3).map(function (ev) {
-      return 'Im selben Jahr \u2013 ' + ev;
-    });
+    var list = pickN(pool, useSong ? 2 : 3);
     if (useSong) {
       var pos = Math.floor(Math.random() * (list.length + 1));
       list.splice(pos, 0, songHint);
@@ -1543,72 +1556,9 @@ function hintSameYearSong(info, year) {
   });
 }
 
-function cleanWikitext(s) {
-  var out = String(s || '');
-  out = out.replace(/<ref[^>]*\/>/g, '');
-  out = out.replace(/<ref[^>]*>[\s\S]*?<\/ref>/g, '');
-  for (var i = 0; i < 3; i++) out = out.replace(/\{\{[^{}]*\}\}/g, '');
-  out = out.replace(/\[\[[^\]|]*\|([^\]]+)\]\]/g, '$1');
-  out = out.replace(/\[\[([^\]]+)\]\]/g, '$1');
-  out = out.replace(/'{2,}/g, '');
-  out = out.replace(/<[^>]+>/g, '');
-  out = out.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
-  out = out.replace(/\s+/g, ' ').trim();
-  return out;
-}
-
-function pickN(arr, n) {
-  if (!arr || !arr.length) return [];
-  var a = arr.slice();
-  var out = [];
-  while (a.length && out.length < n) {
-    var i = Math.floor(Math.random() * a.length);
-    out.push(a.splice(i, 1)[0]);
-  }
-  return out;
-}
-
-/* Liefert den (gecachten) Ereignis-Pool eines Jahres – die konkrete
-   Auswahl daraus wird bei jedem Aufruf neu zufällig gezogen. */
 function loadYearEvents(year) {
-  var lsKey = 'rikster_events_' + year;
-  var cached = null;
-  try { cached = JSON.parse(localStorage.getItem(lsKey) || 'null'); } catch (e) { cached = null; }
-  if (cached && cached.length) return Promise.resolve(cached);
-
-  var base = 'https://de.wikipedia.org/w/api.php?format=json&formatversion=2&origin=*&action=parse&page=' + year;
-  return fetchWithTimeout(base + '&prop=sections', 9000).then(function (r) {
-    return r.ok ? r.json() : null;
-  }).then(function (j) {
-    var secs = (j && j.parse && j.parse.sections) || [];
-    var idx = null;
-    for (var i = 0; i < secs.length; i++) {
-      if (secs[i].line === 'Ereignisse' || secs[i].anchor === 'Ereignisse') { idx = secs[i].index; break; }
-    }
-    if (idx === null) throw new Error('keine Ereignisse');
-    return fetchWithTimeout(base + '&prop=wikitext&section=' + idx, 12000);
-  }).then(function (r) {
-    return r.ok ? r.json() : null;
-  }).then(function (j) {
-    var wt = j && j.parse && j.parse.wikitext;
-    if (!wt) return [];
-    var lines = wt.split('\n');
-    var events = [];
-    var months = '(Januar|Februar|M\u00e4rz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)';
-    var dateRe = new RegExp('^\\d{1,2}\\.\\s?' + months + '\\s*:');
-    for (var i = 0; i < lines.length && events.length < 60; i++) {
-      var line = lines[i];
-      if (!/^\*+\s*/.test(line)) continue;
-      var clean = cleanWikitext(line.replace(/^\*+\s*/, ''));
-      if (!dateRe.test(clean)) continue;
-      if (clean.indexOf(String(year)) !== -1) continue; /* Jahr nicht verraten! */
-      if (clean.length < 30 || clean.length > 240) continue;
-      if (/[{}\[\]]/.test(clean)) continue;
-      events.push(clean);
-    }
-    try { if (events.length) localStorage.setItem(lsKey, JSON.stringify(events)); } catch (e) { /* egal */ }
-    return events;
-  });
+  var pool = (typeof hintsForYear === 'function') ? hintsForYear(year) : [];
+  return Promise.resolve(pool);
 }
 
 function onHintButton() {
