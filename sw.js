@@ -3,16 +3,18 @@
    - Seitenaufrufe & veränderliche Dateien (config.js, app.js, CSS …):
      erst Netz, Cache nur als Fallback → Änderungen kommen sofort an.
    - Große, unveränderliche Dateien (jsQR.js, Icons, data/): erst Cache. */
-const CACHE = 'rikster-v21';
+const CACHE = 'rikster-v22';
 const ASSETS = [
   './',
   'index.html',
   'config.js',
   'manifest.webmanifest',
   'css/style.css',
+  'js/qrcode.js',
   'js/hints.js',
   'js/app.js',
   'js/party.js',
+  'js/cards.js',
   'js/jsQR.js',
   'logo.svg',
   'icons/icon-192.png',
@@ -22,7 +24,7 @@ const ASSETS = [
   'icons/favicon.png'
 ];
 /* Diese Pfade ändern sich nie – Cache-first spart Daten */
-const IMMUTABLE = ['js/jsQR.js', 'icons/', 'data/'];
+const IMMUTABLE = ['js/jsQR.js', 'js/qrcode.js', 'icons/', 'data/'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

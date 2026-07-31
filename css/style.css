@@ -542,3 +542,119 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
 .yearfix:active { color: var(--amber); }
 .yearfix:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
 .home-links { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12.5px; }
+
+
+/* ---------- Wiedergabesteuerung ---------- */
+.playback { width: min(88vw, 380px); margin: 0 auto 14px; display: grid; gap: 8px; }
+.pb-bar {
+  position: relative; height: 22px; cursor: pointer;
+  display: flex; align-items: center; touch-action: none;
+}
+.pb-bar::before {
+  content: ""; position: absolute; left: 0; right: 0; height: 5px;
+  background: var(--surface-2); border-radius: 999px;
+}
+.pb-fill {
+  position: absolute; left: 0; height: 5px; width: 0;
+  background: var(--amber); border-radius: 999px;
+}
+.pb-knob {
+  position: absolute; left: 0; width: 16px; height: 16px; margin-left: -8px;
+  background: var(--amber); border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0,0,0,.5);
+}
+.pb-bar.dragging .pb-knob { transform: scale(1.25); }
+.pb-times {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.pb-buttons { display: flex; justify-content: center; align-items: center; gap: 18px; }
+.pb-btn {
+  width: 46px; height: 46px; border-radius: 50%; flex: none;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+}
+.pb-btn.pb-main { width: 58px; height: 58px; border-color: var(--amber); color: var(--amber); }
+.pb-btn:active { border-color: var(--amber); color: var(--amber); }
+.pb-btn:focus-visible, .pb-bar:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+/* ============================================================
+   EIGENE KARTEN
+   ============================================================ */
+.screen-cards { justify-content: flex-start; gap: 12px; padding-top: calc(var(--sat) + 16px); overflow-y: auto; }
+.cards-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: min(92vw, 460px); }
+.cards-head h2 { font-family: var(--display); font-weight: 800; font-size: 18px; letter-spacing: .02em; }
+.cards-count {
+  min-width: 34px; text-align: center; padding: 3px 9px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--amber);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.cards-row { display: flex; gap: 8px; width: min(92vw, 460px); align-items: stretch; }
+.cards-row input[type="text"], .cards-row textarea {
+  flex: 1; padding: 11px 13px; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 12px; color: var(--text); font-size: 15px; font-family: var(--body); resize: vertical;
+}
+.cards-row input:focus, .cards-row textarea:focus { outline: 2px solid var(--amber); outline-offset: 1px; }
+.btn-sm { padding: 11px 14px; font-size: 13px; flex: none; }
+.cards-hint { width: min(92vw, 460px); color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.search-results, .card-list { width: min(92vw, 460px); display: grid; gap: 8px; }
+.search-results { max-height: 42vh; overflow-y: auto; }
+.sr-item, .cl-item {
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+}
+.sr-item { width: 100%; }
+.sr-item:active { border-color: var(--amber); }
+.cl-main { flex: 1; min-width: 0; }
+.cl-t { font-size: 14.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-a { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-year {
+  width: 68px; flex: none; text-align: center; padding: 8px 4px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--amber); font-family: var(--display); font-weight: 800; font-size: 15px;
+}
+.cl-del { width: 32px; height: 32px; flex: none; border-radius: 50%; border: 1px solid var(--line); color: var(--muted); }
+.cl-del:active { color: var(--pink); border-color: var(--pink); }
+.cards-actions { display: flex; gap: 8px; width: min(92vw, 460px); padding-bottom: calc(var(--sab) + 16px); }
+.cards-actions .btn { flex: 1; padding: 14px 8px; font-size: 13px; }
+
+/* Design-Blatt */
+.design-grid { display: grid; gap: 12px; width: 100%; }
+.design-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; color: #C6CDDC; }
+.design-row select, .design-row input[type="text"] {
+  flex: 1; max-width: 58%; padding: 9px 11px; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 10px; color: var(--text); font-family: var(--body); font-size: 14px;
+}
+.design-row input[type="color"] { width: 54px; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: none; }
+.design-row input[type="file"] { max-width: 58%; font-size: 12px; color: var(--muted); }
+.design-preview { display: flex; gap: 10px; justify-content: center; margin: 4px 0 12px; }
+.design-preview .prev { width: 118px; height: 118px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+
+/* ============================================================
+   DRUCKLAYOUT – A4, 5x5 cm, 4x5 = 20 Karten je Seite
+   ============================================================ */
+#printRoot { display: none; }
+@media print {
+  @page { size: A4 portrait; margin: 0; }
+  html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+  body > *:not(#printRoot) { display: none !important; }
+  #printRoot { display: block !important; }
+  .sheet-page {
+    position: relative; width: 210mm; height: 297mm;
+    page-break-after: always; break-after: page; overflow: hidden;
+  }
+  .sheet-page:last-child { page-break-after: auto; break-after: auto; }
+  .pcard {
+    position: absolute; width: 50mm; height: 50mm; overflow: hidden;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .pcard.cut { outline: 0.2mm dashed rgba(0,0,0,.35); outline-offset: -0.1mm; }
+}
+.pcard-front { display: grid; place-items: center; }
+.pcard-front .qrbox { width: 33mm; height: 33mm; }
+.pcard-front .plabel { position: absolute; bottom: 2.5mm; left: 0; right: 0; text-align: center; font-size: 2.6mm; letter-spacing: .08em; }
+.pcard-back { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3mm; text-align: center; }
+.pcard-back .pa { font-family: var(--display); font-weight: 800; font-size: 3.4mm; line-height: 1.15; margin-bottom: 1mm; }
+.pcard-back .py { font-family: var(--display); font-weight: 900; font-size: 15mm; line-height: 1; letter-spacing: -0.02em; }
+.pcard-back .pt { font-family: var(--display); font-weight: 800; font-size: 3.4mm; line-height: 1.15; margin-top: 1mm; }
+.pcard-back .plabel2 { position: absolute; bottom: 2.5mm; left: 0; right: 0; text-align: center; font-size: 2.4mm; opacity: .65; }

@@ -40,6 +40,7 @@ var LS = {
   verifier: 'rikster_verifier',
   assists: 'rikster_assists',
   fixes: 'rikster_fixes',
+  controls: 'rikster_controls',
   party: 'rikster_party'
 };
 
@@ -58,6 +59,7 @@ var state = {
   camStream: null,
   wakeLock: null,
   assists: true,
+  controls: false,
   gameMode: 'normal',
   hints: { list: null, idx: -1, promise: null }
 };
@@ -511,6 +513,7 @@ function verifySdkAudio(body) {
 
 function stopPlayback() {
   state.playing = false;
+  stopPlaybackUi();
   setVinylSpinning(false);
   releaseWakeLock();
   if (state.mode === 'sdk' && state.sdkPlayer) {
@@ -1769,6 +1772,7 @@ function startTrack(trackId, cardMeta) {
     state.playing = true;
     setPlayerStatus('L\u00e4uft');
     maskMediaSession();
+    startPlaybackUi();
   }).catch(handlePlayError);
 }
 
@@ -2145,6 +2149,186 @@ function setCorrectedYear(info, y) {
   }).catch(function () { /* egal */ });
 }
 
+
+/* ============================================================
+   WIEDERGABESTEUERUNG (nur wenn der Schalter an ist)
+   ------------------------------------------------------------
+   Die Position wird lokal mitgezaehlt und nur ab und zu mit
+   Spotify abgeglichen - das spart Anfragen und laeuft fluessig.
+   ============================================================ */
+var pb = { tick: null, sync: null, posMs: 0, durMs: 0, paused: false, basis: 0, dragging: false };
+
+function fmtTime(ms) {
+  var s = Math.max(0, Math.round(ms / 1000));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+function pbVisible() { return state.controls && state.currentTrackId; }
+
+function startPlaybackUi() {
+  $('#playback').hidden = !pbVisible();
+  if (!pbVisible()) { stopPlaybackUi(); return; }
+  pb.posMs = 0;
+  pb.basis = Date.now();
+  pb.paused = false;
+  pb.durMs = (state.trackInfo && state.trackInfo.duration) || 0;
+  renderPlayback();
+  if (pb.tick) clearInterval(pb.tick);
+  pb.tick = setInterval(function () {
+    if (!pb.dragging && !pb.paused) {
+      pb.posMs = Math.min(pb.durMs || 1e9, pb.posMs + (Date.now() - pb.basis));
+      pb.basis = Date.now();
+    } else {
+      pb.basis = Date.now();
+    }
+    renderPlayback();
+  }, 250);
+  if (pb.sync) clearInterval(pb.sync);
+  pb.sync = setInterval(syncPlayback, 5000);
+  syncPlayback();
+}
+
+function stopPlaybackUi() {
+  if (pb.tick) { clearInterval(pb.tick); pb.tick = null; }
+  if (pb.sync) { clearInterval(pb.sync); pb.sync = null; }
+  var el = $('#playback');
+  if (el) el.hidden = true;
+}
+
+/* Stand von Spotify holen - beim In-App-Player kostenlos, sonst per Abfrage */
+function syncPlayback() {
+  if (!pbVisible() || pb.dragging) return;
+  if (state.mode === 'sdk' && state.sdkPlayer) {
+    state.sdkPlayer.getCurrentState().then(function (s) {
+      if (!s) return;
+      pb.posMs = s.position;
+      pb.durMs = s.duration || pb.durMs;
+      pb.paused = s.paused;
+      pb.basis = Date.now();
+      renderPlayback();
+    }).catch(function () { /* egal */ });
+    return;
+  }
+  api('/me/player').then(function (res) {
+    if (!res.ok) return null;
+    return safeJson(res);
+  }).then(function (j) {
+    if (!j || !j.item) return;
+    if (j.item.id && state.currentTrackId && j.item.id !== state.currentTrackId) return; /* anderer Song laeuft */
+    pb.posMs = j.progress_ms || 0;
+    pb.durMs = (j.item && j.item.duration_ms) || pb.durMs;
+    pb.paused = !j.is_playing;
+    pb.basis = Date.now();
+    renderPlayback();
+  }).catch(function () { /* egal */ });
+}
+
+function renderPlayback() {
+  if (!pbVisible()) return;
+  var dur = pb.durMs || (state.trackInfo && state.trackInfo.duration) || 0;
+  pb.durMs = dur;
+  var anteil = dur ? Math.min(1, Math.max(0, pb.posMs / dur)) : 0;
+  $('#pbFill').style.width = (anteil * 100) + '%';
+  $('#pbKnob').style.left = (anteil * 100) + '%';
+  $('#pbCur').textContent = fmtTime(pb.posMs);
+  $('#pbTot').textContent = dur ? fmtTime(dur) : '--:--';
+  $('#icoPause').hidden = pb.paused;
+  $('#icoPlay').hidden = !pb.paused;
+  $('#btnPlayPause').setAttribute('aria-label', pb.paused ? 'Abspielen' : 'Pause');
+  var bar = $('#pbBar');
+  bar.setAttribute('aria-valuenow', String(Math.round(pb.posMs / 1000)));
+  bar.setAttribute('aria-valuetext', fmtTime(pb.posMs) + ' von ' + (dur ? fmtTime(dur) : 'unbekannt'));
+  setVinylSpinning(!pb.paused);
+}
+
+function togglePlayPause() {
+  if (!pbVisible()) return;
+  var willPause = !pb.paused;
+  pb.paused = willPause;
+  pb.basis = Date.now();
+  renderPlayback();
+  setPlayerStatus(willPause ? 'Pausiert' : 'L\u00e4uft');
+  state.playing = !willPause;
+  if (state.mode === 'sdk' && state.sdkPlayer) {
+    var p = willPause ? state.sdkPlayer.pause() : state.sdkPlayer.resume();
+    p.catch(function () { toast('Wiedergabe reagiert gerade nicht'); });
+    return;
+  }
+  api('/me/player/' + (willPause ? 'pause' : 'play'), { method: 'PUT' }).then(function (res) {
+    if (!res.ok && res.status !== 204) toast('Wiedergabe reagiert gerade nicht');
+  }).catch(function () { toast('Wiedergabe reagiert gerade nicht'); });
+}
+
+function seekTo(ms) {
+  if (!pbVisible()) return;
+  var ziel = Math.max(0, Math.round(ms));
+  if (pb.durMs) ziel = Math.min(ziel, pb.durMs - 500);
+  pb.posMs = ziel;
+  pb.basis = Date.now();
+  renderPlayback();
+  if (state.mode === 'sdk' && state.sdkPlayer) {
+    state.sdkPlayer.seek(ziel).catch(function () { /* egal */ });
+    return;
+  }
+  api('/me/player/seek?position_ms=' + ziel, { method: 'PUT' }).catch(function () { /* egal */ });
+}
+
+function restartTrack() {
+  seekTo(0);
+  if (pb.paused) togglePlayPause();
+}
+
+/* Ziehen und Tippen auf der Fortschrittsleiste */
+function bindPlaybackBar() {
+  var bar = $('#pbBar');
+  function anteilAus(ev) {
+    var r = bar.getBoundingClientRect();
+    var x = (ev.touches && ev.touches[0] ? ev.touches[0].clientX : ev.clientX);
+    return Math.min(1, Math.max(0, (x - r.left) / r.width));
+  }
+  function start(ev) {
+    if (!pbVisible()) return;
+    pb.dragging = true;
+    bar.classList.add('dragging');
+    bewege(ev);
+  }
+  function bewege(ev) {
+    if (!pb.dragging) return;
+    if (ev.cancelable) ev.preventDefault();
+    var dur = pb.durMs || 0;
+    pb.posMs = anteilAus(ev) * dur;
+    renderPlayback();
+  }
+  function ende() {
+    if (!pb.dragging) return;
+    pb.dragging = false;
+    bar.classList.remove('dragging');
+    seekTo(pb.posMs);
+  }
+  bar.addEventListener('touchstart', start, { passive: true });
+  bar.addEventListener('touchmove', bewege, { passive: false });
+  bar.addEventListener('touchend', ende);
+  bar.addEventListener('touchcancel', ende);
+  bar.addEventListener('mousedown', function (ev) { start(ev); });
+  window.addEventListener('mousemove', bewege);
+  window.addEventListener('mouseup', ende);
+  bar.addEventListener('keydown', function (ev) {
+    if (!pbVisible()) return;
+    if (ev.key === 'ArrowLeft') { seekTo(pb.posMs - 5000); ev.preventDefault(); }
+    if (ev.key === 'ArrowRight') { seekTo(pb.posMs + 5000); ev.preventDefault(); }
+    if (ev.key === ' ') { togglePlayPause(); ev.preventDefault(); }
+  });
+}
+
+function applyControls(on, save) {
+  state.controls = on;
+  var sw = $('#toggleControls');
+  if (sw) sw.setAttribute('aria-checked', on ? 'true' : 'false');
+  if (!on) { stopPlaybackUi(); if (state.playing) setVinylSpinning(true); }
+  else if (state.currentTrackId && $('#screen-player').classList.contains('active')) startPlaybackUi();
+  if (save) { try { localStorage.setItem(LS.controls, on ? '1' : '0'); } catch (e) { /* egal */ } }
+}
+
 /* ============================================================
    EINSTELLUNG: Hinweise & Auflösung an/aus
    ============================================================ */
@@ -2186,6 +2370,7 @@ function registerSW() {
 function boot() {
   registerSW();
   applyAssists(localStorage.getItem(LS.assists) !== '0', false);
+  applyControls(localStorage.getItem(LS.controls) === '1', false);
 
   if (!CLIENT_ID || CLIENT_ID.indexOf('HIER') !== -1) {
     $('#setupRedirect').textContent = REDIRECT_URI;
@@ -2291,6 +2476,12 @@ function bindEvents() {
   $('#toggleAssists').addEventListener('click', function () {
     applyAssists(!state.assists, true);
   });
+  $('#toggleControls').addEventListener('click', function () {
+    applyControls(!state.controls, true);
+  });
+  $('#btnPlayPause').addEventListener('click', togglePlayPause);
+  $('#btnRestart').addEventListener('click', restartTrack);
+  bindPlaybackBar();
 }
 
 document.addEventListener('DOMContentLoaded', function () {

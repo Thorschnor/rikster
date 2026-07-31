@@ -81,7 +81,11 @@
         <span class="switch-label">Hinweise &amp; Auflösung</span>
         <button class="switch" id="toggleAssists" role="switch" aria-checked="true" aria-label="Hinweise und Auflösung an/aus"><span class="knob"></span></button>
       </div>
-      <a class="cardlink" href="https://hitster-card-generator.streamlit.app/" target="_blank" rel="noopener">Karten erstellen&nbsp;↗</a>
+      <div class="switch-row">
+        <span class="switch-label">Song-Wiedergabesteuerung</span>
+        <button class="switch" id="toggleControls" role="switch" aria-checked="false" aria-label="Wiedergabesteuerung an/aus"><span class="knob"></span></button>
+      </div>
+      <button class="btn btn-ghost" id="btnCards">Eigene Karten erstellen</button>
     </div>
     <footer class="home-footer">
       <span id="modeBadge" class="mode-badge">&nbsp;</span>
@@ -116,6 +120,23 @@
       <span></span><span></span><span></span><span></span><span></span>
     </div>
     <p class="player-status" id="playerStatus">Wird gestartet …</p>
+    <div class="playback" id="playback" hidden>
+      <div class="pb-bar" id="pbBar" role="slider" aria-label="Position im Song" tabindex="0">
+        <div class="pb-fill" id="pbFill"></div>
+        <div class="pb-knob" id="pbKnob"></div>
+      </div>
+      <div class="pb-times"><span id="pbCur">0:00</span><span id="pbTot">0:00</span></div>
+      <div class="pb-buttons">
+        <button class="pb-btn" id="btnRestart" aria-label="Von vorne beginnen">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 5V2L8 6l4 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+        </button>
+        <button class="pb-btn pb-main" id="btnPlayPause" aria-label="Pause">
+          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" id="icoPause"><path fill="currentColor" d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" id="icoPlay" hidden><path fill="currentColor" d="M7 4l13 8-13 8z"/></svg>
+        </button>
+      </div>
+    </div>
+
     <div class="player-actions" id="playerActions">
       <button class="btn btn-hint" id="btnHint">Hinweis</button>
       <button class="btn btn-ghost" id="btnWeiter">Weiter</button>
@@ -276,6 +297,64 @@
     <button class="btn btn-amber" id="btnWinClose">Weiter</button>
   </div>
 
+  <!-- ================= EIGENE KARTEN ================= -->
+  <section class="screen screen-cards" id="screen-cards">
+    <div class="cards-head">
+      <button class="linkbtn" id="btnCardsBack">‹ Zurück</button>
+      <h2>Eigene Karten</h2>
+      <span class="cards-count" id="cardsCount">0</span>
+    </div>
+
+    <div class="cards-row">
+      <input type="text" id="cardSearch" placeholder="Song oder Interpret suchen …" autocomplete="off">
+      <button class="btn btn-amber btn-sm" id="btnCardSearch">Suchen</button>
+    </div>
+    <div class="search-results" id="searchResults" hidden></div>
+
+    <div class="cards-row">
+      <textarea id="cardLinks" rows="2" placeholder="Spotify-Links einfügen: einzelne Songs oder eine Playlist"></textarea>
+      <button class="btn btn-ghost btn-sm" id="btnCardLinks">Hinzufügen</button>
+    </div>
+
+    <p class="cards-hint" id="cardsHint">Noch keine Karten. Suche einen Song oder füge Spotify-Links ein.</p>
+    <div class="card-list" id="cardList"></div>
+
+    <div class="cards-actions">
+      <button class="btn btn-ghost" id="btnCardsDesign">Design</button>
+      <button class="btn btn-ghost" id="btnCardsClear">Alle löschen</button>
+      <button class="btn btn-amber" id="btnCardsPrint">Drucken / PDF</button>
+    </div>
+  </section>
+
+  <!-- Design-Einstellungen -->
+  <div class="sheet" id="designSheet" aria-hidden="true">
+    <div class="sheet-scroll">
+      <h2 class="sheet-title">Kartendesign</h2>
+      <div class="design-grid">
+        <label class="design-row"><span>Stil</span>
+          <select id="dsTheme">
+            <option value="neon">Neon auf Schwarz</option>
+            <option value="light">Sparsam (weiß, spart Tinte)</option>
+          </select>
+        </label>
+        <label class="design-row"><span>Akzentfarbe</span><input type="color" id="dsAccent" value="#F7A928"></label>
+        <label class="design-row"><span>Beschriftung</span><input type="text" id="dsLabel" maxlength="24" placeholder="z. B. Geburtstag 2026"></label>
+        <label class="design-row"><span>Schnittlinien</span>
+          <button class="switch" id="dsBorders" role="switch" aria-checked="true"><span class="knob"></span></button>
+        </label>
+        <label class="design-row"><span>Rückseite farbig nach Jahr</span>
+          <button class="switch" id="dsGradient" role="switch" aria-checked="true"><span class="knob"></span></button>
+        </label>
+        <label class="design-row"><span>Eigenes Hintergrundbild</span><input type="file" id="dsImage" accept="image/*"></label>
+        <button class="btn btn-ghost btn-sm" id="dsImageClear">Bild entfernen</button>
+      </div>
+      <div class="design-preview" id="dsPreview"></div>
+      <button class="btn btn-amber" id="btnDesignClose">Fertig</button>
+    </div>
+  </div>
+
+  <div id="printRoot" hidden></div>
+
   <!-- ================= MODAL & TOAST ================= -->
   <div class="modal" id="modal" hidden>
     <div class="modal-box">
@@ -293,8 +372,10 @@
 
   <script src="config.js"></script>
   <script src="js/jsQR.js"></script>
+  <script src="js/qrcode.js"></script>
   <script src="js/hints.js"></script>
   <script src="js/app.js"></script>
   <script src="js/party.js"></script>
+  <script src="js/cards.js"></script>
 </body>
 </html>
