@@ -132,7 +132,7 @@
         </button>
         <button class="pb-btn pb-main" id="btnPlayPause" aria-label="Pause">
           <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" id="icoPause"><path fill="currentColor" d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
-          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" id="icoPlay" hidden><path fill="currentColor" d="M7 4l13 8-13 8z"/></svg>
+          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" id="icoPlay" style="display:none"><path fill="currentColor" d="M7 4l13 8-13 8z"/></svg>
         </button>
       </div>
     </div>
@@ -300,19 +300,19 @@
   <!-- ================= EIGENE KARTEN ================= -->
   <section class="screen screen-cards" id="screen-cards">
     <div class="cards-head">
-      <button class="linkbtn" id="btnCardsBack">‹ Zurück</button>
+      <button class="iconbtn" id="btnCardsBack" aria-label="Zurück">‹</button>
       <h2>Eigene Karten</h2>
       <span class="cards-count" id="cardsCount">0</span>
     </div>
 
     <div class="cards-row">
-      <input type="text" id="cardSearch" placeholder="Song oder Interpret suchen …" autocomplete="off">
+      <input type="text" id="cardSearch" placeholder="Song oder Interpret suchen" autocomplete="off">
       <button class="btn btn-amber btn-sm" id="btnCardSearch">Suchen</button>
     </div>
     <div class="search-results" id="searchResults" hidden></div>
 
     <div class="cards-row">
-      <textarea id="cardLinks" rows="2" placeholder="Spotify-Links einfügen: einzelne Songs oder eine Playlist"></textarea>
+      <input type="text" id="cardLinks" placeholder="Spotify-Links einfügen" autocomplete="off">
       <button class="btn btn-ghost btn-sm" id="btnCardLinks">Hinzufügen</button>
     </div>
 
@@ -330,24 +330,70 @@
   <div class="sheet" id="designSheet" aria-hidden="true">
     <div class="sheet-scroll">
       <h2 class="sheet-title">Kartendesign</h2>
+
+      <h3 class="design-head">QR-Seite</h3>
       <div class="design-grid">
-        <label class="design-row"><span>Stil</span>
-          <select id="dsTheme">
-            <option value="neon">Neon auf Schwarz</option>
-            <option value="light">Sparsam (weiß, spart Tinte)</option>
-          </select>
+        <label class="design-row"><span>Rahmen-Design</span>
+          <select id="dsFrame"></select>
         </label>
-        <label class="design-row"><span>Akzentfarbe</span><input type="color" id="dsAccent" value="#F7A928"></label>
-        <label class="design-row"><span>Beschriftung</span><input type="text" id="dsLabel" maxlength="24" placeholder="z. B. Geburtstag 2026"></label>
-        <label class="design-row"><span>Schnittlinien</span>
-          <button class="switch" id="dsBorders" role="switch" aria-checked="true"><span class="knob"></span></button>
+        <label class="design-row"><span>Hintergrundfarbe</span><input type="color" id="dsQrBg" value="#0B0E14"></label>
+        <label class="design-row"><span>QR-Größe</span>
+          <span class="design-range"><input type="range" id="dsQrSize" min="30" max="70" step="1" value="46"><b id="dsQrSizeVal">46%</b></span>
         </label>
-        <label class="design-row"><span>Rückseite farbig nach Jahr</span>
-          <button class="switch" id="dsGradient" role="switch" aria-checked="true"><span class="knob"></span></button>
+        <label class="design-row"><span>Kontur um den QR</span><input type="color" id="dsQrBorder" value="#FFFFFF"></label>
+        <label class="design-row"><span>Konturdicke</span>
+          <span class="design-range"><input type="range" id="dsQrBorderW" min="0" max="8" step="1" value="3"><b id="dsQrBorderWVal">3</b></span>
         </label>
-        <label class="design-row"><span>Eigenes Hintergrundbild</span><input type="file" id="dsImage" accept="image/*"></label>
-        <button class="btn btn-ghost btn-sm" id="dsImageClear">Bild entfernen</button>
+        <label class="design-row"><span>Beschriftung</span><input type="text" id="dsLabel" maxlength="24" placeholder="z.&nbsp;B. 80er Edition"></label>
+        <div class="design-row"><span>Hintergrundbild</span>
+          <span class="upload-wrap">
+            <label class="btn btn-ghost btn-sm" for="dsImage">Bild wählen</label>
+            <input type="file" id="dsImage" accept="image/*">
+            <button class="btn btn-ghost btn-sm" id="dsImageClear">Entfernen</button>
+          </span>
+        </div>
+        <p class="design-note" id="dsImageName"></p>
       </div>
+
+      <h3 class="design-head">Lösungsseite</h3>
+      <div class="design-grid">
+        <div class="design-row"><span>Hitster-Jahresfarben</span>
+          <button class="switch" id="dsHitster" role="switch" aria-checked="true"><span class="knob"></span></button>
+        </div>
+        <label class="design-row" id="rowSolBg"><span>Hintergrundfarbe</span><input type="color" id="dsSolBg" value="#FFFFFF"></label>
+        <div class="design-sub">Interpret</div>
+        <label class="design-row"><span>Schriftfarbe</span><input type="color" id="dsArtistColor" value="#0B0E14"></label>
+        <div class="design-row"><span>Kontur</span>
+          <span class="design-range">
+            <button class="switch small" id="dsArtistOn" role="switch" aria-checked="false"><span class="knob"></span></button>
+            <input type="color" id="dsArtistOutline" value="#FFFFFF">
+          </span>
+        </div>
+        <div class="design-sub">Jahr</div>
+        <label class="design-row"><span>Schriftfarbe</span><input type="color" id="dsYearColor" value="#0B0E14"></label>
+        <div class="design-row"><span>Kontur</span>
+          <span class="design-range">
+            <button class="switch small" id="dsYearOn" role="switch" aria-checked="false"><span class="knob"></span></button>
+            <input type="color" id="dsYearOutline" value="#FFFFFF">
+          </span>
+        </div>
+        <div class="design-sub">Titel</div>
+        <label class="design-row"><span>Schriftfarbe</span><input type="color" id="dsTitleColor" value="#0B0E14"></label>
+        <div class="design-row"><span>Kontur</span>
+          <span class="design-range">
+            <button class="switch small" id="dsTitleOn" role="switch" aria-checked="false"><span class="knob"></span></button>
+            <input type="color" id="dsTitleOutline" value="#FFFFFF">
+          </span>
+        </div>
+      </div>
+
+      <h3 class="design-head">Druck</h3>
+      <div class="design-grid">
+        <div class="design-row"><span>Schnittlinien</span>
+          <button class="switch" id="dsBorders" role="switch" aria-checked="true"><span class="knob"></span></button>
+        </div>
+      </div>
+
       <div class="design-preview" id="dsPreview"></div>
       <button class="btn btn-amber" id="btnDesignClose">Fertig</button>
     </div>

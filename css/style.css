@@ -651,10 +651,57 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
   .pcard.cut { outline: 0.2mm dashed rgba(0,0,0,.35); outline-offset: -0.1mm; }
 }
 .pcard-front { display: grid; place-items: center; }
-.pcard-front .qrbox { width: 33mm; height: 33mm; }
 .pcard-front .plabel { position: absolute; bottom: 2.5mm; left: 0; right: 0; text-align: center; font-size: 2.6mm; letter-spacing: .08em; }
 .pcard-back { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3mm; text-align: center; }
 .pcard-back .pa { font-family: var(--display); font-weight: 800; font-size: 3.4mm; line-height: 1.15; margin-bottom: 1mm; }
 .pcard-back .py { font-family: var(--display); font-weight: 900; font-size: 15mm; line-height: 1; letter-spacing: -0.02em; }
 .pcard-back .pt { font-family: var(--display); font-weight: 800; font-size: 3.4mm; line-height: 1.15; margin-top: 1mm; }
 .pcard-back .plabel2 { position: absolute; bottom: 2.5mm; left: 0; right: 0; text-align: center; font-size: 2.4mm; opacity: .65; }
+
+
+/* Kartengenerator – Feinschliff */
+.iconbtn {
+  width: 40px; height: 40px; flex: none; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+  font-size: 22px; line-height: 1; display: grid; place-items: center;
+}
+.iconbtn:active { border-color: var(--amber); color: var(--amber); }
+.iconbtn:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+/* Beide Eingabezeilen exakt gleich hoch */
+.cards-row input[type="text"] { height: 44px; }
+.cards-row .btn-sm { height: 44px; min-width: 104px; display: grid; place-items: center; }
+
+/* Suchergebnis mit Anspiel-Knopf */
+.sr-item { padding: 8px 10px; gap: 8px; }
+.sr-play {
+  width: 34px; height: 34px; flex: none; border-radius: 50%;
+  border: 1px solid var(--amber); color: var(--amber); background: rgba(247,169,40,.1);
+  display: grid; place-items: center;
+}
+.sr-play:active { background: var(--amber); color: #0B0E14; }
+.sr-main { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: inherit; padding: 0; }
+
+/* Design-Blatt */
+.design-head {
+  width: 100%; margin: 18px 0 6px; font-family: var(--display); font-weight: 800;
+  font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--amber);
+}
+.design-sub { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+.design-range { display: flex; align-items: center; gap: 10px; }
+.design-range input[type="range"] { width: 128px; accent-color: var(--amber); }
+.design-range b { min-width: 40px; text-align: right; font-size: 13px; color: var(--amber); font-variant-numeric: tabular-nums; }
+.design-note { font-size: 12px; color: var(--muted); margin-top: -4px; }
+.switch.small { width: 40px; height: 24px; }
+.switch.small .knob { width: 18px; height: 18px; }
+.switch.small[aria-checked="true"] .knob { transform: translateX(16px); }
+
+/* Datei-Auswahl im App-Look statt grauem Systemknopf */
+.upload-wrap { display: flex; gap: 8px; align-items: center; }
+.upload-wrap input[type="file"] {
+  position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+.upload-wrap label.btn { cursor: pointer; }
+.upload-wrap input[type="file"]:focus-visible + label,
+.upload-wrap label.btn:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }

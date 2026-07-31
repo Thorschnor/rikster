@@ -447,8 +447,8 @@ function maskMediaSession() {
   } catch (e) { /* egal */ }
 }
 
-function playTrack(trackId) {
-  var body = JSON.stringify({ uris: ['spotify:track:' + trackId], position_ms: 0 });
+function playTrack(trackId, positionMs) {
+  var body = JSON.stringify({ uris: ['spotify:track:' + trackId], position_ms: Math.max(0, Math.round(positionMs || 0)) });
   return initPlayback().then(function (mode) {
     if (mode === 'sdk' && state.sdkReady && state.sdkDeviceId) {
       return api('/me/player/play?device_id=' + state.sdkDeviceId, { method: 'PUT', body: body })
@@ -2232,8 +2232,10 @@ function renderPlayback() {
   $('#pbKnob').style.left = (anteil * 100) + '%';
   $('#pbCur').textContent = fmtTime(pb.posMs);
   $('#pbTot').textContent = dur ? fmtTime(dur) : '--:--';
-  $('#icoPause').hidden = pb.paused;
-  $('#icoPlay').hidden = !pb.paused;
+  /* SVG-Elemente kennen die hidden-Eigenschaft nicht - Anzeige direkt setzen.
+     Läuft der Song: Pause-Symbol. Pausiert: Play-Symbol. */
+  $('#icoPause').style.display = pb.paused ? 'none' : '';
+  $('#icoPlay').style.display = pb.paused ? '' : 'none';
   $('#btnPlayPause').setAttribute('aria-label', pb.paused ? 'Abspielen' : 'Pause');
   var bar = $('#pbBar');
   bar.setAttribute('aria-valuenow', String(Math.round(pb.posMs / 1000)));
