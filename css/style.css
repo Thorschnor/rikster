@@ -847,3 +847,74 @@ html, body { overflow-x: hidden; max-width: 100%; }
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(250%); }
 }
+
+/* ============================================================
+   DURCHGÄNGIG MITWACHSENDES LAYOUT
+   ------------------------------------------------------------
+   Vorher waren viele Elemente mit Werten wie 92vw breit. Da sie
+   aber in Containern mit Innenabstand sitzen, ergab das auf
+   schmalen Displays mehr Breite als Platz vorhanden ist.
+   Jetzt füllen sie den verfügbaren Platz und werden nur nach
+   oben begrenzt - damit passt alles auf jedes Display.
+   ============================================================ */
+.chips,
+.wiki,
+.playback,
+.player-actions,
+.mode-wrap, .setup-wrap, .place-wrap, .end-wrap,
+.turn-wrap,
+.cards-head, .cards-row, .cards-hint, .search-results, .card-list,
+.cards-actions, .sr-actions, .fortschritt,
+#screen-play .btn, #screen-play .footnote {
+  width: 100%;
+  max-width: 460px;
+}
+.chips, .wiki, .playback, .player-actions { max-width: 380px; }
+.mode-wrap, .setup-wrap, .place-wrap, .end-wrap { max-width: 420px; }
+.turn-wrap { max-width: 440px; }
+#screen-play .btn, #screen-play .footnote { max-width: 340px; }
+
+.hitster-card { width: 100%; max-width: 340px; }
+.design-grid, .ed-list, .color-grid, .design-preview { width: 100%; max-width: 460px; }
+
+/* Nichts darf seitlich überstehen */
+.screen > *, .sheet-scroll > * { max-width: 100%; }
+.cl-t, .cl-a, .ed-name, .stand-name, .setup-ed, .design-row > span {
+  overflow-wrap: anywhere;
+}
+
+/* Zeilen im Design-Blatt brechen um, statt zu quetschen */
+.design-row { flex-wrap: wrap; row-gap: 6px; }
+.design-row > span:first-child { flex: 1 1 auto; min-width: 0; }
+.design-row select, .design-row input[type="text"] { max-width: 100%; flex: 0 1 200px; }
+.design-range { flex: 0 1 auto; }
+.design-range input[type="range"] { width: min(128px, 40vw); }
+
+/* Farbfelder passen sich der Breite an */
+.color-grid { grid-template-columns: repeat(auto-fit, minmax(34px, 1fr)); }
+
+/* Eingabezeilen: Feld darf schrumpfen, Knopf bleibt lesbar */
+.cards-row input[type="text"] { min-width: 0; flex: 1 1 auto; }
+.cards-row .btn-sm { min-width: 88px; padding-left: 10px; padding-right: 10px; }
+
+/* Weniger Rand auf schmalen Displays */
+@media (max-width: 400px) {
+  .screen { padding-left: 14px; padding-right: 14px; }
+  .sheet-scroll { padding-left: 14px; padding-right: 14px; }
+  .cards-actions .btn { font-size: 12px; padding: 13px 4px; }
+  .turn-actions { gap: 8px; }
+  .stepper-val { font-size: 30px; }
+}
+@media (max-width: 340px) {
+  .screen { padding-left: 10px; padding-right: 10px; }
+  .sheet-scroll { padding-left: 10px; padding-right: 10px; }
+  .cards-row .btn-sm { min-width: 76px; font-size: 12px; }
+  .design-row { font-size: 13px; }
+  .colorbtn { width: 46px; }
+  .tl-card { width: 84px; height: 84px; }
+}
+
+/* Sehr breite Displays: alles bleibt mittig und ruhig */
+@media (min-width: 720px) {
+  .screen { padding-left: 32px; padding-right: 32px; }
+}
