@@ -24,12 +24,17 @@ var DESIGN_STD = {
   qrBorderW: 3,
   label: '',
   hitster: true,
+  hitFormat: false,
   solBg: '#FFFFFF',
   artistColor: '#FFFFFF', artistOn: false, artistOutline: '#0B0E14',
   yearColor: '#FFFFFF', yearOn: false, yearOutline: '#0B0E14',
   titleColor: '#FFFFFF', titleOn: false, titleOutline: '#0B0E14',
   borders: true
 };
+
+/* Bezugsgröße für alle Vorschau-Maße: bei dieser Breite gelten die
+   Zahlenwerte unten unverändert, größere Vorschauen skalieren mit. */
+var VORSCHAU_PX = 120;
 
 var deck = { songs: [], design: {} };
 Object.keys(DESIGN_STD).forEach(function (k) { deck.design[k] = DESIGN_STD[k]; });
@@ -312,10 +317,12 @@ function kartenVorderseite(song, px) {
   box.style.width = d.qrSize + '%';
   box.style.height = d.qrSize + '%';
   box.style.background = '#FFFFFF';
-  box.style.borderRadius = px ? '4px' : '1.2mm';
+  box.style.borderRadius = px ? (4 * (px / VORSCHAU_PX)).toFixed(1) + 'px' : '1.2mm';
   box.style.overflow = 'hidden';
   if (d.qrBorderW > 0) {
-    box.style.boxShadow = '0 0 0 ' + (px ? (d.qrBorderW * 0.5) + 'px' : (d.qrBorderW * 0.25) + 'mm') + ' ' + d.qrBorder;
+    box.style.boxShadow = '0 0 0 ' +
+      (px ? (d.qrBorderW * 0.5 * (px / VORSCHAU_PX)).toFixed(2) + 'px' : (d.qrBorderW * 0.25) + 'mm') +
+      ' ' + d.qrBorder;
   }
   box.innerHTML = qrSvg(song.link, '#000000', '#FFFFFF');
   el.appendChild(box);
@@ -325,7 +332,11 @@ function kartenVorderseite(song, px) {
     lab.className = 'plabel';
     lab.style.color = d.qrBorder;
     lab.textContent = d.label;
-    if (px) lab.style.cssText += ';position:absolute;bottom:5px;left:0;right:0;text-align:center;font-size:7px;letter-spacing:.08em';
+    if (px) {
+      var fv = px / VORSCHAU_PX;
+      lab.style.cssText += ';position:absolute;bottom:' + (5 * fv).toFixed(1) +
+        'px;left:0;right:0;text-align:center;font-size:' + (7 * fv).toFixed(2) + 'px;letter-spacing:.08em';
+    }
     el.appendChild(lab);
   }
   return el;
@@ -358,35 +369,94 @@ function kartenRueckseite(song, jahre, px) {
   el.style.position = px ? 'relative' : 'absolute';
   el.style.background = jahresFarbe(song.year, jahre.length ? jahre : [song.year || 2000]);
   if (px) {
-    el.style.cssText += ';width:' + px + 'px;height:' + px + 'px;display:flex;flex-direction:column;' +
-      'align-items:center;justify-content:center;padding:8px;text-align:center';
+    el.style.cssText += ';width:' + px + 'px;height:' + px + 'px;padding:' + (px * 0.05).toFixed(1) +
+      'px;text-align:center;overflow:hidden';
   }
-  var kd = px ? 0.12 : 0.28;
-  var a = document.createElement('div');
-  a.className = 'pa';
-  a.textContent = song.artist;
-  a.style.cssText = 'color:' + d.artistColor + ';' + kontur(d.artistOn, d.artistOutline, kd) +
-    (px ? 'font-family:var(--display);font-weight:800;font-size:9px;line-height:1.15' : '');
-  var y = document.createElement('div');
-  y.className = 'py';
-  y.textContent = song.year || '?';
-  y.style.cssText = 'color:' + d.yearColor + ';' + kontur(d.yearOn, d.yearOutline, kd * 1.6) +
-    (px ? 'font-family:var(--display);font-weight:900;font-size:34px;line-height:1' : '');
-  var t = document.createElement('div');
-  t.className = 'pt';
-  t.textContent = song.title;
-  t.style.cssText = 'color:' + d.titleColor + ';' + kontur(d.titleOn, d.titleOutline, kd) +
-    (px ? 'font-family:var(--display);font-weight:800;font-size:9px;line-height:1.15;margin-top:2px' : '');
-  el.appendChild(a); el.appendChild(y); el.appendChild(t);
+  /* Alle Maße wachsen mit der Kartengröße mit - sonst bleibt die
+     Schrift in der großen Vorschau so klein wie in der kleinen. */
+  var f = px ? px / VORSCHAU_PX : 1;
+  var kd = px ? 0.12 * f : 0.28;
+
+  function bau(klasse, text, basisPx, farbe2, konturAn, konturFarbe) {
+    var e = document.createElement('div');
+    e.className = klasse;
+    e.textContent = text;
+    e.style.cssText = 'color:' + farbe2 + ';' + kontur(konturAn, konturFarbe, klasse === 'py' ? kd * 1.6 : kd) +
+      (px ? ';font-family:var(--display);font-weight:' + (klasse === 'py' ? 900 : 800) +
+        ';font-size:' + (basisPx * f).toFixed(2) + 'px;line-height:' + (klasse === 'py' ? 1 : 1.15) : '');
+    return e;
+  }
+
+  /* Lange Texte kleiner setzen, damit nichts abgeschnitten wird.
+     Geschätzt über die Zeichenzahl - dieselbe Regel wie in der PDF,
+     nur ohne echte Textvermessung. */
+  function basisGroesse(text) {
+    var laenge = String(text || '').length;
+    if (laenge <= 46) return 9;                    /* passt in zwei Zeilen */
+    if (laenge <= 68) return 9 * 0.86;             /* drei Zeilen */
+    var faktor = Math.sqrt(68 / laenge) * 0.86;
+    return Math.max(9 * 0.40, 9 * faktor);
+  }
+
+  var a = bau('pa', song.artist, basisGroesse(song.artist), d.artistColor, d.artistOn, d.artistOutline);
+  var y = bau('py', song.year || '?', 34, d.yearColor, d.yearOn, d.yearOutline);
+  var t = bau('pt', song.title, basisGroesse(song.title), d.titleColor, d.titleOn, d.titleOutline);
+
+  if (d.hitFormat && px) {
+    /* Wie auf den Originalkarten: weit auseinander, Jahr exakt mittig,
+       Interpret und Titel symmetrisch bei 22 % und 78 %. */
+    el.style.cssText += ';display:block;position:relative';
+    var seit = (px * 0.042).toFixed(1) + 'px';
+    a.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:15.5%';
+    y.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:50%;transform:translateY(-50%)';
+    t.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';bottom:15.5%';
+    el.appendChild(a); el.appendChild(y); el.appendChild(t);
+  } else {
+    if (px) el.style.cssText += ';display:flex;flex-direction:column;align-items:center;justify-content:center';
+    t.style.cssText += px ? ';margin-top:' + (2 * f).toFixed(1) + 'px' : '';
+    el.appendChild(a); el.appendChild(y); el.appendChild(t);
+  }
+
   if (d.label) {
     var lab = document.createElement('div');
     lab.className = 'plabel2';
     lab.style.color = d.titleColor;
     lab.textContent = d.label;
-    if (px) lab.style.cssText += ';position:absolute;bottom:4px;left:0;right:0;text-align:center;font-size:6px;opacity:.7';
+    if (px) lab.style.cssText += ';position:absolute;bottom:' + (4 * f).toFixed(1) +
+      'px;left:0;right:0;text-align:center;font-size:' + (6 * f).toFixed(2) + 'px;opacity:.7';
     el.appendChild(lab);
   }
   return el;
+}
+
+/* ============================================================
+   FORTSCHRITTSANZEIGE
+   ============================================================ */
+function fsZeige(text, fertig, gesamt) {
+  var box = $('#fortschritt');
+  if (!box) return;
+  box.hidden = false;
+  $('#fsText').textContent = text;
+  var fill = $('#fsFill');
+  if (typeof gesamt === 'number' && gesamt > 0) {
+    fill.classList.remove('unbestimmt');
+    var anteil = Math.min(1, fertig / gesamt);
+    fill.style.width = (anteil * 100) + '%';
+    $('#fsZahl').textContent = fertig + ' / ' + gesamt;
+  } else {
+    /* Menge noch unbekannt: laufender Balken */
+    fill.classList.add('unbestimmt');
+    $('#fsZahl').textContent = (typeof fertig === 'number' && fertig > 0) ? String(fertig) : '';
+  }
+}
+
+function fsAus() {
+  var box = $('#fortschritt');
+  if (!box) return;
+  box.hidden = true;
+  $('#fsFill').classList.remove('unbestimmt');
+  $('#fsFill').style.width = '0%';
+  $('#fsZahl').textContent = '';
 }
 
 /* ============================================================
@@ -394,6 +464,7 @@ function kartenRueckseite(song, jahre, px) {
    ============================================================ */
 function openCards() {
   deckLoad().then(function () {
+    fsAus();
     renderDeck();
     applyDesignInputs();
     showScreen('screen-cards');
@@ -412,7 +483,8 @@ function renderDeck() {
     var main = document.createElement('div');
     main.className = 'cl-main';
     var t = document.createElement('div'); t.className = 'cl-t'; t.textContent = s.title;
-    var a = document.createElement('div'); a.className = 'cl-a'; a.textContent = s.artist;
+    var a = document.createElement('div'); a.className = 'cl-a';
+    a.textContent = s.artist + (s.quelle ? '  \u00b7  Jahr laut ' + s.quelle : '');
     main.appendChild(t); main.appendChild(a);
 
     var jahr = document.createElement('input');
@@ -455,9 +527,16 @@ function addSong(t, jahrPruefen) {
 }
 
 function verfeinereJahr(eintrag) {
-  if (typeof findOriginalYear !== 'function') return Promise.resolve();
-  return findOriginalYear(eintrag.artist, eintrag.title).then(function (y) {
-    if (y && (!eintrag.year || y < eintrag.year)) { eintrag.year = y; deckSave(); renderDeck(); }
+  if (typeof pruefeJahr !== 'function') return Promise.resolve();
+  return pruefeJahr(eintrag.artist, eintrag.title, eintrag.year).then(function (r) {
+    if (r && r.jahr && r.jahr !== eintrag.year) {
+      eintrag.year = r.jahr;
+      eintrag.quelle = r.quelle;
+      deckSave();
+      renderDeck();
+    } else if (r) {
+      eintrag.quelle = r.quelle;
+    }
   }).catch(function () { /* egal */ });
 }
 
@@ -539,8 +618,6 @@ function ausgewaehlteHinzufuegen() {
   stopPlayback();                 /* angespielten Song beenden */
   var liste = auswahl.slice();
   liste.forEach(function (t) { addSong(t, false); });
-  toast(liste.length === 1 ? 'Song hinzugefügt \u2013 Jahr wird geprüft \u2026'
-                           : liste.length + ' Songs hinzugefügt \u2013 Jahre werden geprüft \u2026');
   suchListeSchliessen();
   $('#cardSearch').value = '';
   jahreNachziehen();
@@ -566,9 +643,9 @@ function onAddLinks() {
 }
 
 function ladeTracks(ids) {
-  toast(ids.length + (ids.length === 1 ? ' Song wird geladen \u2026' : ' Songs werden geladen \u2026'));
   var alle = [];
   var fehler = null;
+  fsZeige('Songs werden geladen \u2026', 0, ids.length);
 
   /* Songs EINZELN abrufen. Der Sammelabruf /tracks?ids=... wird von
      Spotify bei manchen Konten mit 403 abgelehnt, der Einzelabruf
@@ -585,14 +662,17 @@ function ladeTracks(ids) {
       return res.json();
     }).then(function (t) {
       if (t && t.id) alle.push(t);
+      fsZeige('Songs werden geladen \u2026', i + 1, ids.length);
       return new Promise(function (r) { setTimeout(r, 60); }).then(function () { return naechster(i + 1); });
     }).catch(function () {
+      fsZeige('Songs werden geladen \u2026', i + 1, ids.length);
       return naechster(i + 1);
     });
   }
 
   return naechster(0).then(function () {
     if (!alle.length) {
+      fsAus();
       openModal({
         title: 'Songs konnten nicht geladen werden',
         text: 'Spotify hat den Abruf abgelehnt.' + (fehler ? '\n\nTechnik: ' + fehler : '') +
@@ -603,19 +683,25 @@ function ladeTracks(ids) {
     }
     alle.forEach(function (t) { addSong(t, false); });
     var fehlend = ids.length - alle.length;
-    toast(alle.length + ' hinzugefügt' + (fehlend ? ' (' + fehlend + ' nicht abrufbar)' : '') + ' \u2013 Jahre werden geprüft \u2026');
+    if (fehlend) toast(fehlend + (fehlend === 1 ? ' Song war nicht abrufbar' : ' Songs waren nicht abrufbar'));
     return jahreNachziehen();
   });
 }
 
 function jahreNachziehen() {
   var offen = deck.songs.filter(function (s) { return !s.geprueft; });
-  if (!offen.length) return Promise.resolve();
+  if (!offen.length) { fsAus(); return Promise.resolve(); }
+  fsZeige('Jahreszahlen werden geprüft \u2026', 0, offen.length);
   function naechster(i) {
-    if (i >= offen.length) { toast('Fertig \u2013 Jahre geprüft'); return Promise.resolve(); }
+    if (i >= offen.length) {
+      fsAus();
+      toast('Fertig \u2013 ' + offen.length + (offen.length === 1 ? ' Song geprüft' : ' Songs geprüft'));
+      return Promise.resolve();
+    }
     var s = offen[i];
-    return verfeinereJahr(s).then(function () {
+    return verfeinereJahr(s).catch(function () { /* egal */ }).then(function () {
       s.geprueft = true; deckSave();
+      fsZeige('Jahreszahlen werden geprüft \u2026', i + 1, offen.length);
       return new Promise(function (r) { setTimeout(r, 120); }).then(function () { return naechster(i + 1); });
     });
   }
@@ -623,7 +709,7 @@ function jahreNachziehen() {
 }
 
 function ladePlaylist(pid) {
-  toast('Playlist wird gelesen \u2026');
+  fsZeige('Playlist wird gelesen \u2026', 0, 0);
   var letzterFehler = null;
 
   function ueberApi(art) {
@@ -640,6 +726,7 @@ function ladePlaylist(pid) {
           var t = it && (it.track || it.item);
           if (t && t.id) alle.push(t);
         });
+        fsZeige('Playlist wird gelesen \u2026', alle.length, 0);
         if (items.length === 50 && alle.length < 1000) return seite(off + 50);
         if (!alle.length) throw new Error('leer');
         return alle;
@@ -665,16 +752,17 @@ function ladePlaylist(pid) {
     .then(function (liste) {
       liste.forEach(function (t) { addSong(t, false); });
       $('#cardLinks').value = '';
-      toast(liste.length + ' Songs übernommen \u2013 Jahre werden geprüft \u2026');
+      toast(liste.length + ' Songs übernommen');
       return jahreNachziehen();
     })
     .catch(function () {
       /* Beide Wege über die Schnittstelle gescheitert -> Embed versuchen */
       return ueberEmbed().then(function (ids) {
         $('#cardLinks').value = '';
-        toast(ids.length + ' Titel gefunden \u2013 werden geladen \u2026');
+        toast(ids.length + ' Titel gefunden');
         return ladeTracks(ids);
       }).catch(function () {
+        fsAus();
         openModal({
           title: 'Playlist nicht lesbar',
           text: 'Spotify hat den Zugriff auf die Playlist abgelehnt.' +
@@ -784,6 +872,7 @@ function applyDesignInputs() {
     $('#ds' + gross + 'On').setAttribute('aria-checked', d[k + 'On'] ? 'true' : 'false');
     $('#ds' + gross + 'Outline').style.background = d[k + 'Outline'];
   });
+  $('#dsHitFormat').setAttribute('aria-checked', d.hitFormat ? 'true' : 'false');
   $('#dsBorders').setAttribute('aria-checked', d.borders ? 'true' : 'false');
   $('#dsImageName').textContent = deckImage ? 'Eigenes Bild aktiv' : '';
   renderDesignPreview();
@@ -1169,7 +1258,6 @@ function qrPdf(doc, doc_text, x, y, groesse) {
    mmAus() rechnet Vorschau-Pixel in Millimeter um, ptAus() zusätzlich
    in Punkt - denn jsPDF erwartet Schriftgrößen in Punkt, nicht in mm.
    Genau das war vorher falsch: Die Schrift kam um Faktor 2,83 zu klein. */
-var VORSCHAU_PX = 120;
 function mmAus(vorschauPx, kartenGroesseMm) { return vorschauPx / VORSCHAU_PX * kartenGroesseMm; }
 function ptAus(vorschauPx, kartenGroesseMm) { return mmAus(vorschauPx, kartenGroesseMm) * 72 / 25.4; }
 
@@ -1234,30 +1322,72 @@ function karteHintenPdf(doc, song, x, y, s, jahre) {
   var zhText = mmAus(9 * 1.15, s);       /* Zeilenhöhe = Schriftgröße x 1.15 */
   var breite = s - mmAus(16, s);
 
-  doc.setFontSize(ptText);
-  var aZeilen = doc.splitTextToSize(String(song.artist || ''), breite).slice(0, 2);
-  var tZeilen = doc.splitTextToSize(String(song.title || ''), breite).slice(0, 2);
+  /* Passt der Text nicht in zwei Zeilen, wird NUR dieser Text
+     schrittweise kleiner - bis alles vollständig sichtbar ist. */
+  function passendeZeilen(text, maxZeilen) {
+    var gross = ptText;
+    for (var schritt = 0; schritt < 14; schritt++) {
+      doc.setFontSize(gross);
+      var z = doc.splitTextToSize(String(text || ''), breite);
+      if (z.length <= maxZeilen) return { zeilen: z, pt: gross };
+      gross = gross * 0.92;                       /* 8 % kleiner probieren */
+      if (gross < ptText * 0.40) {                /* Untergrenze erreicht */
+        doc.setFontSize(gross);
+        return { zeilen: doc.splitTextToSize(String(text || ''), breite).slice(0, maxZeilen + 1), pt: gross };
+      }
+    }
+    return { zeilen: [String(text || '')], pt: gross };
+  }
 
-  /* Das Jahr sitzt IMMER exakt in der Kartenmitte - egal wie viele
-     Zeilen Interpret und Titel brauchen. Die beiden wachsen nach
-     außen: der Interpret nach oben, der Titel nach unten. */
+  var aPass = passendeZeilen(song.artist, 3);
+  var tPass = passendeZeilen(song.title, 3);
+  var aZeilen = aPass.zeilen, tZeilen = tPass.zeilen;
+  var ptA = aPass.pt, ptT = tPass.pt;
+  var zhA = zhText * (ptA / ptText);
+  var zhT = zhText * (ptT / ptText);
+
   var cx = x + s / 2;
-  var mitte = y + s / 2;
-  var hJahr = mmAus(34, s);
-  var abstand = mmAus(2, s);
 
-  /* Grundlinie des Jahres: optische Mitte der Ziffern */
-  var yJ = mitte + hJahr * 0.36;   /* Wert aus Messung: Ziffernmitte trifft die Kartenmitte */
-  textMitKontur(doc, [String(song.year || '?')], cx, yJ, ptJahr, d.yearColor, d.yearOn, d.yearOutline, 0);
+  if (d.hitFormat) {
+    /* Originalkarten-Anordnung: Das Jahr sitzt exakt in der Kartenmitte,
+       Interpret und Titel stehen symmetrisch darüber und darunter -
+       gleicher Abstand nach oben wie nach unten. Gemessen an den
+       Originalkarten: Blockmitten bei 22 % und 78 % der Kartenhöhe. */
+    var mitteH = y + s / 2;
 
-  /* Interpret nach oben stapeln: letzte Zeile direkt über dem Jahr */
-  var yAunten = mitte - hJahr * 0.5 - abstand;
-  var yA = yAunten - (aZeilen.length - 1) * zhText;
-  textMitKontur(doc, aZeilen, cx, yA, ptText, d.artistColor, d.artistOn, d.artistOutline, zhText);
+    /* Jahr: Ziffernmitte auf die Kartenmitte legen */
+    var yJ2 = mitteH + mmAus(34, s) * 0.36;
+    textMitKontur(doc, [String(song.year || '?')], cx, yJ2, ptJahr, d.yearColor, d.yearOn, d.yearOutline, 0);
 
-  /* Titel nach unten */
-  var yT = mitte + hJahr * 0.5 + abstand + zhText * 0.78;
-  textMitKontur(doc, tZeilen, cx, yT, ptText, d.titleColor, d.titleOn, d.titleOutline, zhText);
+    /* Interpret und Titel bekommen denselben Randabstand: Der Interpret
+       wächst vom Rand nach unten, der Titel vom Rand nach oben. Dadurch
+       bleibt oben und unten gleich viel Luft, egal wie viele Zeilen. */
+    /* Je mehr Zeilen, desto näher rücken die Blöcke an den Rand -
+       so bleibt zwischen Text und Jahreszahl immer genug Luft. */
+    var maxZeilen = Math.max(aZeilen.length, tZeilen.length);
+    var rand = s * (maxZeilen >= 3 ? 0.105 : (maxZeilen === 2 ? 0.130 : 0.155));
+
+    var yA = y + rand + zhA * 0.34;
+    textMitKontur(doc, aZeilen, cx, yA, ptA, d.artistColor, d.artistOn, d.artistOutline, zhA);
+
+    var yT = y + s - rand - (tZeilen.length - 1) * zhT - zhT * 0.22 + mmAus(2.0, s);   /* Grundlinien-Ausgleich */
+    textMitKontur(doc, tZeilen, cx, yT, ptT, d.titleColor, d.titleOn, d.titleOutline, zhT);
+  } else {
+    /* Kompakt: Jahr exakt mittig, Interpret und Titel wachsen nach außen */
+    var mitte = y + s / 2;
+    var hJahr = mmAus(34, s);
+    var abstand = mmAus(2, s);
+
+    var yJ = mitte + hJahr * 0.36;
+    textMitKontur(doc, [String(song.year || '?')], cx, yJ, ptJahr, d.yearColor, d.yearOn, d.yearOutline, 0);
+
+    var yAunten = mitte - hJahr * 0.5 - abstand;
+    var yA2 = yAunten - (aZeilen.length - 1) * zhA;
+    textMitKontur(doc, aZeilen, cx, yA2, ptA, d.artistColor, d.artistOn, d.artistOutline, zhA);
+
+    var yT2 = mitte + hJahr * 0.5 + abstand + zhT * 0.78;
+    textMitKontur(doc, tZeilen, cx, yT2, ptT, d.titleColor, d.titleOn, d.titleOutline, zhT);
+  }
 
   if (d.label) {
     var lc = rgbStr(d.titleColor);
@@ -1422,6 +1552,11 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
+  $('#dsHitFormat').addEventListener('click', function () {
+    var an = !deck.design.hitFormat;
+    this.setAttribute('aria-checked', an ? 'true' : 'false');
+    setzeDesign('hitFormat', an);
+  });
   $('#dsBorders').addEventListener('click', function () {
     var an = !deck.design.borders;
     this.setAttribute('aria-checked', an ? 'true' : 'false');

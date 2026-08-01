@@ -331,6 +331,10 @@
       <button class="btn btn-ghost btn-sm" id="btnCardLinks">Hinzufügen</button>
     </div>
 
+    <div class="fortschritt" id="fortschritt" hidden>
+      <div class="fs-kopf"><span id="fsText">Wird geladen …</span><span id="fsZahl"></span></div>
+      <div class="fs-bar"><div class="fs-fill" id="fsFill"></div></div>
+    </div>
     <p class="cards-hint" id="cardsHint">Noch keine Karten. Suche einen Song oder füge Spotify-Links ein.</p>
     <div class="card-list" id="cardList"></div>
 
@@ -378,6 +382,10 @@
           <button class="switch" id="dsHitster" role="switch" aria-checked="true"><span class="knob"></span></button>
         </div>
         <div class="design-row" id="rowSolBg"><span>Hintergrundfarbe</span><button class="colorbtn" id="dsSolBg" aria-label="Farbe wählen"></button></div>
+        <div class="design-row"><span>Hitster-Formatierung</span>
+          <button class="switch" id="dsHitFormat" role="switch" aria-checked="false"><span class="knob"></span></button>
+        </div>
+        <p class="design-note">Setzt Interpret, Jahr und Titel weiter auseinander – wie auf den Originalkarten.</p>
         <div class="design-sub">Interpret</div>
         <div class="design-row"><span>Schriftfarbe</span><button class="colorbtn" id="dsArtistColor" aria-label="Farbe wählen"></button></div>
         <div class="design-row"><span>Kontur</span>

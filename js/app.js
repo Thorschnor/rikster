@@ -803,6 +803,134 @@ function resolveHitsterCard(scan) {
 /* ============================================================
    SONG-INFOS für die Auflösung
    ============================================================ */
+
+/* ============================================================
+   JAHRESPRÜFUNG ÜBER MEHRERE QUELLEN
+   ------------------------------------------------------------
+   Spotify nennt oft das Jahr einer Neuveröffentlichung. Deshalb
+   wird gegengeprüft, in dieser Reihenfolge:
+   1) Hitster-Kartendatenbank (von Menschen geprüft, offline)
+   2) Deutsche und englische Wikipedia (Songartikel)
+   3) Früheste Fassung bei Spotify
+   Die kleinste plausible Jahreszahl gewinnt, sofern sie durch
+   mindestens eine verlässliche Quelle gedeckt ist.
+   ============================================================ */
+var jahrIndex = null;        /* Nachschlagewerk aus allen Editionen */
+var jahrIndexJob = null;
+
+function baueJahrIndex() {
+  if (jahrIndex) return Promise.resolve(jahrIndex);
+  if (jahrIndexJob) return jahrIndexJob;
+  var editionen = ['de', 'de-aaaa0007', 'de-aaaa0012', 'de-aaaa0015', 'de-aaaa0019',
+    'de-aaaa0025', 'de-aaaa0026', 'de-aaaa0039', 'de-aaaa0040', 'de-aaaa0042',
+    'de-aaaa0054', 'fr', 'fr-aaaa0031', 'nl', 'nordics', 'pl-aaae0001',
+    'pl-aaae0004', 'hu-aaae0003', 'ca-aaad0001'];
+  jahrIndexJob = Promise.all(editionen.map(function (lang) {
+    return loadHitsterCsv(lang).catch(function () { return null; });
+  })).then(function (teile) {
+    var idx = {};
+    teile.forEach(function (map) {
+      if (!map) return;
+      Object.keys(map).forEach(function (num) {
+        var m = map[num];
+        if (!m || !m.year || !m.artist || !m.title) return;
+        var k = normalize(mainArtist(m.artist)) + '|' + normalize(cleanTitle(m.title));
+        if (!idx[k] || m.year < idx[k]) idx[k] = m.year;
+      });
+    });
+    jahrIndex = idx;
+    return idx;
+  });
+  return jahrIndexJob;
+}
+
+/* 1) Kartendatenbank */
+function jahrAusDatenbank(artist, title) {
+  return baueJahrIndex().then(function (idx) {
+    var k = normalize(mainArtist(artist)) + '|' + normalize(cleanTitle(title));
+    return idx[k] || null;
+  }).catch(function () { return null; });
+}
+
+/* 2) Wikipedia: Erscheinungsjahr aus dem Songartikel */
+function jahrAusWikipedia(artist, title) {
+  var t = cleanTitle(title);
+  var a = mainArtist(artist);
+
+  function suche(lang) {
+    var q = '"' + t.replace(/"/g, '') + '" ' + a + (lang === 'de' ? ' Lied' : ' song');
+    var url = 'https://' + lang + '.wikipedia.org/w/api.php?action=query&list=search&format=json&formatversion=2&origin=*&srlimit=4&srsearch=' +
+      encodeURIComponent(q);
+    return fetchWithTimeout(url, 9000).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (j) {
+      var hits = (j && j.query && j.query.search) || [];
+      var nt = normalize(t), na = normalize(a);
+      for (var i = 0; i < hits.length; i++) {
+        var n = normalize(hits[i].title);
+        if (n.indexOf(nt) !== -1 && n !== na) return { lang: lang, titel: hits[i].title };
+      }
+      return null;
+    }).catch(function () { return null; });
+  }
+
+  function auswerten(treffer) {
+    if (!treffer) return null;
+    var url = 'https://' + treffer.lang + '.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exintro=1&redirects=1&format=json&formatversion=2&origin=*&titles=' +
+      encodeURIComponent(treffer.titel);
+    return fetchWithTimeout(url, 9000).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (j) {
+      var p = j && j.query && j.query.pages && j.query.pages[0];
+      var text = (p && p.extract) || '';
+      if (!text) return null;
+      /* Interpret muss vorkommen, sonst ist es der falsche Artikel */
+      if (normalize(text).indexOf(normalize(a)) === -1) return null;
+      var jahre = [];
+      var re = /\b(19[0-9]{2}|20[0-2][0-9])\b/g, m;
+      while ((m = re.exec(text.slice(0, 1200))) !== null) jahre.push(parseInt(m[1], 10));
+      if (!jahre.length) return null;
+      jahre.sort(function (x, y) { return x - y; });
+      return jahre[0];
+    }).catch(function () { return null; });
+  }
+
+  return suche('de').then(function (tr) {
+    if (tr) return auswerten(tr);
+    return suche('en').then(auswerten);
+  }).catch(function () { return null; });
+}
+
+/* Alles zusammenführen */
+function pruefeJahr(artist, title, spotifyJahr) {
+  return Promise.all([
+    jahrAusDatenbank(artist, title),
+    jahrAusWikipedia(artist, title),
+    findOriginalYear(artist, title).catch(function () { return null; })
+  ]).then(function (res) {
+    var db = res[0], wiki = res[1], spot = res[2];
+    var quellen = [];
+    if (db) quellen.push({ jahr: db, q: 'Kartendatenbank', gewicht: 3 });
+    if (wiki) quellen.push({ jahr: wiki, q: 'Wikipedia', gewicht: 2 });
+    if (spot) quellen.push({ jahr: spot, q: 'Spotify', gewicht: 1 });
+    if (!quellen.length) return null;
+
+    /* Kartendatenbank hat Vorrang - dort sind die Jahre geprüft */
+    var beste = quellen[0];
+    quellen.forEach(function (q) {
+      if (q.gewicht > beste.gewicht) beste = q;
+      else if (q.gewicht === beste.gewicht && q.jahr < beste.jahr) beste = q;
+    });
+    /* Deutlich frühere Angabe einer anderen Quelle übernehmen,
+       wenn Spotify offensichtlich ein Remaster nennt */
+    quellen.forEach(function (q) {
+      if (q.gewicht >= 2 && q.jahr < beste.jahr - 1) beste = q;
+    });
+    if (beste.jahr < 1900 || beste.jahr > 2100) return null;
+    return { jahr: beste.jahr, quelle: beste.q };
+  });
+}
+
 /* ---------- Jahresangaben ----------
    Spotify liefert das Datum des ALBUMS, auf dem der Titel liegt. Bei
    alten Songs ist das oft ein Remaster oder eine Compilation - dann
@@ -917,15 +1045,19 @@ function fetchTrackInfo(trackId, cardMeta) {
       if (cardMeta.year) {
         applyYear(info, cardMeta.year);
       } else if (!korrektur.year) {
-        /* Karte ohne Jahresangabe: frueheste Fassung suchen.
-           Bei eigener Jahreskorrektur entfaellt die Suche komplett. */
-        schritt = findOriginalYear(
+        /* Karte ohne Jahresangabe: über mehrere Quellen gegenprüfen.
+           Bei eigener Jahreskorrektur entfällt die Suche komplett. */
+        schritt = pruefeJahr(
           korrektur.artist || cardMeta.artist || info.artists[0],
-          korrektur.title || cardMeta.title || info.name
-        ).then(function (y) {
+          korrektur.title || cardMeta.title || info.name,
+          parseInt(info.year, 10)
+        ).then(function (r) {
           var sy = parseInt(info.year, 10);
-          if (y && (!isFinite(sy) || y < sy)) applyYear(info, y);
-        });
+          if (r && r.jahr && (!isFinite(sy) || r.jahr !== sy)) {
+            applyYear(info, r.jahr);
+            info.jahrQuelle = r.quelle;
+          }
+        }).catch(function () { /* egal */ });
       }
     }
     return schritt.then(function () {
