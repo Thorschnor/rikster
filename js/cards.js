@@ -467,12 +467,28 @@ function anspielen(t) {
   playTrack(t.id, mitte).catch(function () { toast('Anspielen hat nicht geklappt'); });
 }
 
+var auswahl = [];   /* aktuell angehakte Suchtreffer */
+
+function auswahlAnzeigen() {
+  $('#srCount').textContent = auswahl.length === 1 ? '1 ausgewählt' : auswahl.length + ' ausgewählt';
+  $('#btnAddSelected').disabled = auswahl.length === 0;
+}
+
+function suchListeSchliessen() {
+  auswahl = [];
+  $('#searchResults').hidden = true;
+  $('#srActions').hidden = true;
+}
+
 function onSearch() {
   var q = $('#cardSearch').value.trim();
   if (q.length < 2) { toast('Bitte etwas mehr eintippen'); return; }
+  auswahl = [];
   var box = $('#searchResults');
   box.hidden = false;
+  $('#srActions').hidden = true;
   box.innerHTML = '<p class="cards-hint">Wird gesucht \u2026</p>';
+
   searchTracks(q, 10).then(function (items) {
     box.innerHTML = '';
     if (!items.length) { box.innerHTML = '<p class="cards-hint">Nichts gefunden.</p>'; return; }
@@ -488,21 +504,43 @@ function onSearch() {
 
       var main = document.createElement('button');
       main.className = 'sr-main';
+      main.setAttribute('aria-pressed', 'false');
       var tt = document.createElement('div'); tt.className = 'cl-t'; tt.textContent = t.name;
       var aa = document.createElement('div'); aa.className = 'cl-a';
       aa.textContent = (t.artists || []).map(function (a) { return a.name; }).join(', ') +
         ' \u00b7 ' + String((t.album && t.album.release_date) || '').slice(0, 4);
       main.appendChild(tt); main.appendChild(aa);
+
+      var haken = document.createElement('span');
+      haken.className = 'sr-check';
+      haken.textContent = '\u2713';
+
+      /* Antippen hakt an oder ab - die Liste bleibt offen */
       main.addEventListener('click', function () {
-        addSong(t);
-        box.hidden = true;
-        $('#cardSearch').value = '';
+        var i = auswahl.indexOf(t);
+        if (i === -1) { auswahl.push(t); row.classList.add('selected'); main.setAttribute('aria-pressed', 'true'); }
+        else { auswahl.splice(i, 1); row.classList.remove('selected'); main.setAttribute('aria-pressed', 'false'); }
+        $('#srActions').hidden = false;
+        auswahlAnzeigen();
       });
 
-      row.appendChild(play); row.appendChild(main);
+      row.appendChild(play); row.appendChild(main); row.appendChild(haken);
       box.appendChild(row);
     });
+    $('#srActions').hidden = false;
+    auswahlAnzeigen();
   }).catch(function () { box.innerHTML = '<p class="cards-hint">Die Suche hat nicht geklappt.</p>'; });
+}
+
+function ausgewaehlteHinzufuegen() {
+  if (!auswahl.length) return;
+  var liste = auswahl.slice();
+  liste.forEach(function (t) { addSong(t, false); });
+  toast(liste.length === 1 ? 'Song hinzugefügt \u2013 Jahr wird geprüft \u2026'
+                           : liste.length + ' Songs hinzugefügt \u2013 Jahre werden geprüft \u2026');
+  suchListeSchliessen();
+  $('#cardSearch').value = '';
+  jahreNachziehen();
 }
 
 function trackIdsAus(text) {
@@ -626,12 +664,27 @@ function applyDesignInputs() {
 }
 
 function renderDesignPreview() {
-  var box = $('#dsPreview');
-  if (!box) return;
-  box.innerHTML = '';
   var beispiel = deck.songs[0] || { id: 'demo', artist: 'Interpret', title: 'Songtitel', year: 1984,
                                     link: 'https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC' };
   var jahre = deck.songs.map(function (s) { return s.year; }).filter(function (y) { return !!y; });
+
+  function fuelle(id, karte, px) {
+    var box = $(id);
+    if (!box) return;
+    box.innerHTML = '';
+    var h = document.createElement('div');
+    h.className = 'prev';
+    h.appendChild(karte(beispiel, jahre, px));
+    box.appendChild(h);
+  }
+  /* Große Einzelvorschau direkt unter den jeweiligen Einstellungen */
+  fuelle('#dsPreviewFront', function (s, j, px) { return kartenVorderseite(s, px); }, 190);
+  fuelle('#dsPreviewBack', function (s, j, px) { return kartenRueckseite(s, j, px); }, 190);
+
+  /* Unten beide Seiten klein nebeneinander */
+  var box = $('#dsPreview');
+  if (!box) return;
+  box.innerHTML = '';
   var v = document.createElement('div'); v.className = 'prev'; v.appendChild(kartenVorderseite(beispiel, 120));
   var r = document.createElement('div'); r.className = 'prev'; r.appendChild(kartenRueckseite(beispiel, jahre, 120));
   box.appendChild(v); box.appendChild(r);
@@ -716,6 +769,8 @@ document.addEventListener('DOMContentLoaded', function () {
   $('#cardSearch').addEventListener('keydown', function (e) { if (e.key === 'Enter') onSearch(); });
   $('#cardLinks').addEventListener('keydown', function (e) { if (e.key === 'Enter') onAddLinks(); });
   $('#btnCardLinks').addEventListener('click', onAddLinks);
+  $('#btnAddSelected').addEventListener('click', ausgewaehlteHinzufuegen);
+  $('#btnSearchClose').addEventListener('click', function () { suchListeSchliessen(); });
   $('#btnCardsPrint').addEventListener('click', baueDruck);
   $('#btnCardsClear').addEventListener('click', function () {
     if (!deck.songs.length) return;

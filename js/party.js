@@ -24,6 +24,35 @@
 
 'use strict';
 
+
+/* Verfügbare Hitster-Editionen (Namen aus der Community-Datenbank) */
+var EDITIONEN = [
+  { code: 'de', name: 'Hitster Deutschland' },
+  { code: 'de-aaaa0007', name: 'Schlagerparty' },
+  { code: 'de-aaaa0012', name: 'Summer Party' },
+  { code: 'de-aaaa0015', name: 'Guilty Pleasures' },
+  { code: 'de-aaaa0019', name: 'Bingo' },
+  { code: 'de-aaaa0025', name: 'Bayern 1' },
+  { code: 'de-aaaa0026', name: 'Movies & TV Soundtracks' },
+  { code: 'de-aaaa0039', name: 'Rock' },
+  { code: 'de-aaaa0040', name: 'Celebration' },
+  { code: 'de-aaaa0042', name: 'Christmas' },
+  { code: 'de-aaaa0054', name: 'Große Erweiterung (500 Karten)' },
+  { code: 'de-aaaa0064', name: 'Battle of the Generations' },
+  { code: 'fr', name: 'Hitster France' },
+  { code: 'fr-aaaa0031', name: 'France Summer Party' },
+  { code: 'nl', name: 'Hitster Netherlands' },
+  { code: 'nordics', name: 'Hitster Nordics Suomi' },
+  { code: 'pl-aaae0001', name: 'Central Europe' },
+  { code: 'pl-aaae0004', name: 'Central Europe Summer Party' },
+  { code: 'hu-aaae0003', name: 'Hitster magyar kiadás' },
+  { code: 'ca-aaad0001', name: 'Hitster Canada' }
+];
+function editionName(code) {
+  for (var i = 0; i < EDITIONEN.length; i++) if (EDITIONEN[i].code === code) return EDITIONEN[i].name;
+  return code;
+}
+
 var PARTY_COLORS = ['#FF2E63', '#33B1FF', '#3DDC84', '#FFE14D', '#F7A928', '#B388FF', '#FF8A65', '#4DD0E1'];
 var party = null;        /* laufender Spielstand */
 var setupDraft = null;   /* Zustand des Einrichtungs-Screens */
@@ -56,6 +85,10 @@ function medal(pl) {
 /* ============================================================
    MODUS-WAHL
    ============================================================ */
+function openPlayScreen() {
+  showScreen('screen-play');
+}
+
 function openModeScreen() {
   var saved = partyLoad();
   var btn = $('#btnModeResume');
@@ -81,13 +114,16 @@ function startNormalMode() {
 /* ============================================================
    PARTY EINRICHTEN
    ============================================================ */
-function openPartySetup() {
+function openPartySetup(ohneKarten) {
   var saved = partyLoad();
   setupDraft = {
     names: saved ? saved.players.map(function (p) { return p.name; }) : ['', ''],
-    target: saved ? saved.goal : 10
+    target: saved ? saved.goal : 10,
+    cardless: !!ohneKarten,
+    editions: (saved && saved.cardless) ? saved.players.map(function (p) { return (p.editions || []).slice(); }) : []
   };
   if (setupDraft.names.length < 2) setupDraft.names = ['', ''];
+  while (setupDraft.editions.length < setupDraft.names.length) setupDraft.editions.push(['de']);
   renderSetup();
   showScreen('screen-party-setup');
 }
@@ -122,14 +158,28 @@ function renderSetup() {
     var del = miniBtn('\u2715', 'Spieler entfernen', function () {
       if (setupDraft.names.length <= 2) { toast('Mindestens zwei Spieler'); return; }
       setupDraft.names.splice(i, 1);
+      setupDraft.editions.splice(i, 1);
       renderSetup();
     });
     row.appendChild(input);
     row.appendChild(up);
     row.appendChild(down);
     row.appendChild(del);
+
+    if (setupDraft.cardless) {
+      var eds = setupDraft.editions[i] || [];
+      var edBtn = document.createElement('button');
+      edBtn.type = 'button';
+      edBtn.className = 'setup-ed' + (eds.length ? '' : ' leer');
+      edBtn.textContent = eds.length
+        ? (eds.length === 1 ? editionName(eds[0]) : eds.length + ' Editionen: ' + eds.map(editionName).join(', '))
+        : 'Editionen wählen';
+      edBtn.addEventListener('click', function () { openEditionSheet(i); });
+      row.appendChild(edBtn);
+    }
     list.appendChild(row);
   });
+  $('#setupEdHint').hidden = !setupDraft.cardless;
   $('#targetVal').textContent = String(setupDraft.target);
 }
 
@@ -138,6 +188,47 @@ function swapNames(a, b) {
   var t = setupDraft.names[a];
   setupDraft.names[a] = setupDraft.names[b];
   setupDraft.names[b] = t;
+  var e = setupDraft.editions[a];
+  setupDraft.editions[a] = setupDraft.editions[b];
+  setupDraft.editions[b] = e;
+  renderSetup();
+}
+
+var edSpieler = 0;
+
+function openEditionSheet(i) {
+  edSpieler = i;
+  $('#edTitle').textContent = 'Editionen für ' + ((setupDraft.names[i] || '').trim() || ('Spieler ' + (i + 1)));
+  var liste = $('#edList');
+  liste.innerHTML = '';
+  EDITIONEN.forEach(function (e) {
+    var an = (setupDraft.editions[i] || []).indexOf(e.code) !== -1;
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ed-item' + (an ? ' on' : '');
+    b.setAttribute('aria-pressed', an ? 'true' : 'false');
+    var box = document.createElement('span'); box.className = 'ed-box'; box.textContent = '\u2713';
+    var name = document.createElement('span'); name.className = 'ed-name'; name.textContent = e.name;
+    var code = document.createElement('span'); code.className = 'ed-count'; code.textContent = e.code;
+    b.appendChild(box); b.appendChild(name); b.appendChild(code);
+    b.addEventListener('click', function () {
+      var arr = setupDraft.editions[i] || (setupDraft.editions[i] = []);
+      var k = arr.indexOf(e.code);
+      if (k === -1) arr.push(e.code); else arr.splice(k, 1);
+      b.classList.toggle('on');
+      b.setAttribute('aria-pressed', k === -1 ? 'true' : 'false');
+    });
+    liste.appendChild(b);
+  });
+  var s = $('#editionSheet');
+  s.classList.add('open');
+  s.setAttribute('aria-hidden', 'false');
+}
+
+function closeEditionSheet() {
+  var s = $('#editionSheet');
+  s.classList.remove('open');
+  s.setAttribute('aria-hidden', 'true');
   renderSetup();
 }
 
@@ -149,15 +240,27 @@ function makePlayer(name, i) {
     att: [],        /* Versuche: {correct, bought, year, decade, genre} */
     hadStart: false,
     bought: 0, received: 0, given: 0, dropped: 0,
-    place: null
+    place: null,
+    editions: []
   };
 }
 
 function startParty() {
+  if (setupDraft.cardless) {
+    var ohne = setupDraft.names.map(function (_, i) { return (setupDraft.editions[i] || []).length; });
+    if (ohne.some(function (n) { return n === 0; })) {
+      toast('Bitte für jeden Spieler mindestens eine Edition wählen');
+      return;
+    }
+  }
   var players = setupDraft.names.map(function (n, i) {
-    return makePlayer((n || '').trim() || ('Spieler ' + (i + 1)), i);
+    var p = makePlayer((n || '').trim() || ('Spieler ' + (i + 1)), i);
+    if (setupDraft.cardless) p.editions = (setupDraft.editions[i] || []).slice();
+    return p;
   });
   party = {
+    cardless: !!setupDraft.cardless,
+    used: [],
     goal: setupDraft.target,
     players: players,
     turnIdx: 0,
@@ -213,7 +316,9 @@ function renderHub() {
       ? 'Ziel erreicht!'
       : ('Noch ' + left + (left === 1 ? ' Karte' : ' Karten') + ' bis zum Sieg'));
   renderTimeline($('#turnTimeline'), p);
-  $('#btnTurnScan').textContent = p.hadStart ? 'Karte scannen' : 'Startkarte scannen';
+  $('#btnTurnScan').textContent = party.cardless
+    ? (p.hadStart ? 'Zufälligen Song ziehen' : 'Startsong ziehen')
+    : (p.hadStart ? 'Karte scannen' : 'Startkarte scannen');
   $('#btnTurnBuy').disabled = !p.hadStart;
   renderStandings();
 }
@@ -435,6 +540,120 @@ function utilityError(err, scan, purpose) {
     primary: 'Nochmal scannen',
     onPrimary: function () { partyScan(purpose); },
     secondary: 'Abbrechen'
+  });
+}
+
+
+/* ============================================================
+   OHNE KARTEN: Songs zufällig ziehen
+   ------------------------------------------------------------
+   Der Pool entsteht aus den Editionen des jeweiligen Spielers.
+   Bereits gezogene Songs merkt sich die Runde, damit derselbe
+   Titel nie zweimal vorkommt - auch nicht, wenn zwei Spieler
+   dieselbe Edition gewählt haben.
+   ============================================================ */
+function songSchluessel(meta) {
+  return normalize(meta.artist) + '|' + normalize(cleanTitle(meta.title));
+}
+
+function bauePool(pl) {
+  var editionen = (pl.editions && pl.editions.length) ? pl.editions : ['de'];
+  return Promise.all(editionen.map(function (lang) {
+    return loadHitsterCsv(lang).then(function (map) { return { lang: lang, map: map }; })
+      .catch(function () { return null; });
+  })).then(function (teile) {
+    var pool = [];
+    teile.forEach(function (t) {
+      if (!t || !t.map) return;
+      Object.keys(t.map).forEach(function (num) {
+        var m = t.map[num];
+        if (!m || !m.title || !m.artist) return;
+        var k = songSchluessel(m);
+        if (party.used.indexOf(k) !== -1) return;
+        pool.push({ lang: t.lang, num: parseInt(num, 10), meta: m, key: k });
+      });
+    });
+    return pool;
+  });
+}
+
+function ausPoolZiehen(pool, versuch) {
+  if (!pool.length) return Promise.reject({ code: 'POOL_LEER' });
+  if (versuch >= 8) return Promise.reject({ code: 'NO_MATCH' });
+  var i = Math.floor(Math.random() * pool.length);
+  var k = pool.splice(i, 1)[0];
+  return searchSpotifyTrack(k.meta).then(function (id) {
+    party.used.push(k.key);
+    partySave();
+    return { id: id, meta: k.meta };
+  }).catch(function () {
+    return ausPoolZiehen(pool, versuch + 1);
+  });
+}
+
+function zieheSong(pl) {
+  return bauePool(pl).then(function (pool) {
+    if (!pool.length) throw { code: 'POOL_LEER' };
+    return ausPoolZiehen(pool, 0);
+  });
+}
+
+/* Startsong oder gekaufte Karte: ohne Musik direkt einsortieren */
+function partyDrawUtility(purpose) {
+  var p = curPlayer();
+  renderHub();
+  showScreen('screen-party-turn');
+  toast(purpose === 'start' ? 'Startsong wird gezogen \u2026' : 'Song wird gezogen \u2026');
+  zieheSong(p).then(function (r) {
+    return fetchTrackInfo(r.id, r.meta).then(function (info) {
+      state.currentTrackId = r.id;
+      state.cardMeta = r.meta;
+      state.trackInfo = info;
+      state.infoPromise = Promise.resolve(info);
+      resetHints();
+      applyUtilityCard(purpose, info);
+    });
+  }).catch(function (err) { ziehFehler(err, purpose); });
+}
+
+/* Rate-Song: läuft wie im Kartenspiel, nur ohne Scannen */
+function partyDrawGuess() {
+  var p = curPlayer();
+  party.purpose = 'guess';
+  partySave();
+  document.body.classList.add('party-guess');
+  var w = $('#btnWeiter');
+  w.textContent = 'Einordnen';
+  w.classList.remove('btn-ghost');
+  w.classList.add('btn-amber');
+  showScreen('screen-player');
+  setVinylSpinning(true);
+  requestWakeLock();
+  setPlayerStatus('Song wird gezogen \u2026');
+  zieheSong(p).then(function (r) {
+    startTrack(r.id, r.meta);
+  }).catch(function (err) { ziehFehler(err, 'guess'); });
+}
+
+function ziehFehler(err, purpose) {
+  setVinylSpinning(false);
+  setPlayerStatus('Pausiert');
+  var code = err && err.code;
+  if (code === 'POOL_LEER') {
+    openModal({
+      title: 'Keine Songs mehr übrig',
+      text: 'Aus den gewählten Editionen wurden schon alle Songs gespielt. Ihr könnt das Spiel beenden oder eine neue Runde starten.',
+      primary: 'Zur Übersicht', onPrimary: partyGoHub
+    });
+    return;
+  }
+  openModal({
+    title: 'Song konnte nicht geladen werden',
+    text: 'Es wurde kein passender Song bei Spotify gefunden.' + (err && err.detail ? '\n\nTechnik: ' + err.detail : '') +
+      '\n\nVersuch es einfach nochmal \u2013 dann wird ein anderer Song gezogen.',
+    primary: 'Nochmal ziehen',
+    onPrimary: function () { purpose === 'guess' ? partyDrawGuess() : partyDrawUtility(purpose); },
+    secondary: 'Zur Übersicht', onSecondary: partyGoHub
   });
 }
 
@@ -829,6 +1048,7 @@ function partyAgain() {
   party.turnIdx = 0;
   party.nextPlace = 1;
   party.ended = false;
+  party.used = [];
   party.pending = null;
   party.last = null;
   party.purpose = null;
@@ -964,6 +1184,7 @@ function onSkipSong() {
   stopPlayback();
   resetHints();
   toast('Song getauscht \u2013 1 Chip in die Mitte!');
+  if (party.cardless) { partyDrawGuess(); return; }
   startScanner();
 }
 
@@ -971,14 +1192,19 @@ function onSkipSong() {
    EVENTS
    ============================================================ */
 document.addEventListener('DOMContentLoaded', function () {
+  $('#btnWithCards').addEventListener('click', openModeScreen);
+  $('#btnWithoutCards').addEventListener('click', function () { openPartySetup(true); });
+  $('#btnPlayBack').addEventListener('click', function () { showScreen('screen-home'); });
+  $('#btnEdClose').addEventListener('click', closeEditionSheet);
   $('#btnModeNormal').addEventListener('click', startNormalMode);
-  $('#btnModeParty').addEventListener('click', openPartySetup);
+  $('#btnModeParty').addEventListener('click', function () { openPartySetup(false); });
   $('#btnModeResume').addEventListener('click', resumeParty);
   $('#btnModeBack').addEventListener('click', function () { showScreen('screen-home'); });
 
   $('#btnAddPlayer').addEventListener('click', function () {
     if (setupDraft.names.length >= 8) { toast('Maximal acht Spieler'); return; }
     setupDraft.names.push('');
+    setupDraft.editions.push(['de']);
     renderSetup();
   });
   $('#btnTargetMinus').addEventListener('click', function () {
@@ -988,12 +1214,15 @@ document.addEventListener('DOMContentLoaded', function () {
     if (setupDraft.target < 20) { setupDraft.target++; renderSetup(); }
   });
   $('#btnPartyStart').addEventListener('click', startParty);
-  $('#btnSetupBack').addEventListener('click', function () { showScreen('screen-mode'); });
+  $('#btnSetupBack').addEventListener('click', function () {
+    showScreen(setupDraft && setupDraft.cardless ? 'screen-play' : 'screen-mode');
+  });
 
   $('#btnTurnScan').addEventListener('click', function () {
     var p = curPlayer();
     if (p.place !== null) { toast('Du bist schon fertig \u2013 N\u00e4chster Spieler!'); return; }
     activateAudio();
+    if (party.cardless) { p.hadStart ? partyDrawGuess() : partyDrawUtility('start'); return; }
     partyScan(p.hadStart ? 'guess' : 'start');
   });
   $('#btnTurnBuy').addEventListener('click', function () {
@@ -1001,6 +1230,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!p.hadStart) { toast('Zuerst die Startkarte scannen'); return; }
     if (p.place !== null) { toast('Du bist schon fertig'); return; }
     toast('Kaufen kostet 3 Chips \u2013 ab in die Mitte!');
+    if (party.cardless) { partyDrawUtility('buy'); return; }
     partyScan('buy');
   });
   $('#btnTurnNext').addEventListener('click', nextPlayer);

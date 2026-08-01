@@ -2450,10 +2450,10 @@ function bindEvents() {
     stopPlayback();
     logout();
   });
-  $('#btnPlay').addEventListener('click', function () {
+    $('#btnPlay').addEventListener('click', function () {
     activateAudio();
     initPlayback();
-    if (window.openModeScreen) { openModeScreen(); } else { startScanner(); }
+    if (window.openPlayScreen) { openPlayScreen(); } else { startScanner(); }
   });
   $('#btnScanReset').addEventListener('click', restartCamera);
   $('#btnCancelScan').addEventListener('click', function () {

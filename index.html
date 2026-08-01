@@ -156,6 +156,16 @@
 
   <!-- ================= AUFLÖSUNG (Sheet) ================= -->
   <!-- ================= MODUS-WAHL ================= -->
+  <section class="screen" id="screen-play">
+    <h2 class="wordmark small">SPIELEN</h2>
+    <p class="tagline">Wie wollt ihr spielen?</p>
+    <button class="btn btn-amber" id="btnWithCards">Mit Karten</button>
+    <p class="footnote">Ihr habt echte Hitster-Karten und scannt die QR-Codes.</p>
+    <button class="btn btn-ghost" id="btnWithoutCards">Ohne Karten</button>
+    <p class="footnote">Kein Kartenspiel nötig – das Handy zieht die Songs und wird herumgereicht.</p>
+    <button class="linkbtn" id="btnPlayBack">Zurück</button>
+  </section>
+
   <section class="screen" id="screen-mode">
     <div class="mode-wrap">
       <h2 class="mode-title">Wie wollt ihr spielen?</h2>
@@ -175,6 +185,7 @@
       <p class="setup-label">Spieler &amp; Reihenfolge</p>
       <div class="setup-list" id="setupPlayers"></div>
       <button class="btn btn-ghost btn-block" id="btnAddPlayer">+ Spieler hinzufügen</button>
+      <p class="cards-hint" id="setupEdHint" hidden>Tippe bei jedem Spieler auf die Editionen, aus denen seine Songs kommen sollen.</p>
       <p class="setup-label">Karten zum Sieg</p>
       <div class="stepper">
         <button class="mini-btn" id="btnTargetMinus" aria-label="Weniger Karten">−</button>
@@ -310,6 +321,11 @@
       <button class="btn btn-amber btn-sm" id="btnCardSearch">Suchen</button>
     </div>
     <div class="search-results" id="searchResults" hidden></div>
+    <div class="sr-actions" id="srActions" hidden>
+      <span class="sr-count" id="srCount">0 ausgewählt</span>
+      <button class="btn btn-ghost btn-sm" id="btnSearchClose">Schließen</button>
+      <button class="btn btn-amber btn-sm" id="btnAddSelected">Hinzufügen</button>
+    </div>
 
     <div class="cards-row">
       <input type="text" id="cardLinks" placeholder="Spotify-Links einfügen" autocomplete="off">
@@ -355,6 +371,8 @@
         <p class="design-note" id="dsImageName"></p>
       </div>
 
+      <div class="design-preview big" id="dsPreviewFront"></div>
+
       <h3 class="design-head">Lösungsseite</h3>
       <div class="design-grid">
         <div class="design-row"><span>Hitster-Jahresfarben</span>
@@ -387,6 +405,8 @@
         </div>
       </div>
 
+      <div class="design-preview big" id="dsPreviewBack"></div>
+
       <h3 class="design-head">Druck</h3>
       <div class="design-grid">
         <div class="design-row"><span>Schnittlinien</span>
@@ -394,8 +414,18 @@
         </div>
       </div>
 
+      <h3 class="design-head">Fertiges Design</h3>
       <div class="design-preview" id="dsPreview"></div>
       <button class="btn btn-amber" id="btnDesignClose">Fertig</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="editionSheet" aria-hidden="true">
+    <div class="sheet-scroll">
+      <h2 class="sheet-title" id="edTitle">Editionen</h2>
+      <p class="cards-hint">Aus welchen Editionen sollen die Songs kommen? Mehrfachauswahl möglich.</p>
+      <div class="ed-list" id="edList"></div>
+      <button class="btn btn-amber" id="btnEdClose">Fertig</button>
     </div>
   </div>
 

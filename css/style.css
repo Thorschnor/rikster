@@ -705,3 +705,47 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
 .upload-wrap label.btn { cursor: pointer; }
 .upload-wrap input[type="file"]:focus-visible + label,
 .upload-wrap label.btn:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+
+/* Mehrfachauswahl in der Suche */
+.sr-actions {
+  display: flex; align-items: center; gap: 8px;
+  width: min(92vw, 460px); padding: 4px 0 2px;
+}
+.sr-count { flex: 1; font-size: 13px; color: var(--muted); }
+.sr-item.selected { border-color: var(--amber); background: rgba(247,169,40,.10); }
+.sr-check {
+  width: 22px; height: 22px; flex: none; border-radius: 6px;
+  border: 1px solid var(--line); display: grid; place-items: center;
+  color: transparent; font-size: 13px;
+}
+.sr-item.selected .sr-check { border-color: var(--amber); background: var(--amber); color: #0B0E14; }
+
+/* Große Einzelvorschauen im Design-Blatt */
+.design-preview.big { margin: 10px 0 2px; }
+.design-preview.big .prev { width: 190px; height: 190px; border-radius: 10px; }
+
+/* Zwischenmenü und Editionsauswahl */
+.wordmark.small { font-size: 30px; margin-bottom: 2px; }
+#screen-play .btn { width: min(84vw, 340px); }
+#screen-play .footnote { margin-top: -6px; margin-bottom: 10px; max-width: min(84vw, 340px); }
+.ed-list { display: grid; gap: 8px; width: 100%; margin: 8px 0 16px; max-height: 46vh; overflow-y: auto; }
+.ed-item {
+  display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;
+  padding: 11px 12px; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 12px; color: var(--text); font-size: 14px;
+}
+.ed-item.on { border-color: var(--amber); background: rgba(247,169,40,.10); }
+.ed-box {
+  width: 20px; height: 20px; flex: none; border-radius: 6px; border: 1px solid var(--line);
+  display: grid; place-items: center; font-size: 12px; color: transparent;
+}
+.ed-item.on .ed-box { background: var(--amber); border-color: var(--amber); color: #0B0E14; }
+.ed-name { flex: 1; min-width: 0; }
+.ed-count { font-size: 12px; color: var(--muted); }
+.setup-ed {
+  grid-column: 1 / -1; text-align: left; padding: 7px 11px; margin-top: -2px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--muted); font-size: 12.5px;
+}
+.setup-ed.leer { border-color: var(--pink); color: var(--pink); }
