@@ -108,7 +108,34 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; background
 }
 .btn-spotify { background: var(--spotify); color: #04120A; box-shadow: 0 10px 30px rgba(29,185,84,.28); }
 .btn-wide { width: 100%; }
-.linkbtn { color: var(--muted); text-decoration: underline; font-size: inherit; }
+.linkbtn {
+  color: var(--muted); text-decoration: none;
+  padding: 6px 13px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  font-size: 12.5px; font-family: var(--body);
+}
+.linkbtn:active { color: var(--amber); border-color: var(--amber); }
+.linkbtn:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+/* Zurück-Knöpfe einheitlich als Pille mit Pfeil */
+.btn-back {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 11px 20px 11px 16px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  color: var(--muted); font-size: 14px; font-family: var(--body);
+}
+.btn-back::before { content: "\2039"; font-size: 20px; line-height: 1; margin-top: -2px; }
+.btn-back:active { color: var(--amber); border-color: var(--amber); }
+.btn-back:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+/* Schlanker Knopf für Nebenaktionen */
+.btn-slim {
+  padding: 10px 20px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--muted); font-size: 13.5px; font-family: var(--body);
+}
+.btn-slim:active { color: var(--pink); border-color: var(--pink); }
+.btn-slim:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
 
 /* ---------- Setup ---------- */
 .setup-box {
@@ -401,7 +428,7 @@ body.assists-off .player-actions { grid-template-columns: 1fr; }
 
 .setup-label { justify-self: start; color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; margin-top: 6px; }
 .setup-list { width: 100%; display: grid; gap: 8px; }
-.setup-row { display: flex; gap: 6px; align-items: center; }
+.setup-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .setup-row input {
   flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line);
   border-radius: 12px; color: var(--text); font-family: var(--body);
@@ -535,9 +562,11 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
 .modal-choices button:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
 /* Korrektur-Knopf am Ende der Auflösung */
 .yearfix {
-  align-self: center; margin-top: 2px;
-  color: var(--muted); font-size: 13px; text-decoration: underline;
-  text-underline-offset: 3px; padding: 6px 10px;
+  align-self: center; margin-top: 6px;
+  color: var(--muted); font-size: 13px;
+  padding: 9px 18px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2);
+  font-family: var(--body);
 }
 .yearfix:active { color: var(--amber); }
 .yearfix:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
@@ -743,9 +772,22 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
 .ed-item.on .ed-box { background: var(--amber); border-color: var(--amber); color: #0B0E14; }
 .ed-name { flex: 1; min-width: 0; }
 .ed-count { font-size: 12px; color: var(--muted); }
+/* Editionsauswahl bekommt eine eigene Zeile unter dem Namen */
 .setup-ed {
-  grid-column: 1 / -1; text-align: left; padding: 7px 11px; margin-top: -2px;
+  flex: 1 0 100%; width: 100%; text-align: left;
+  padding: 8px 11px; margin-top: 2px;
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
-  color: var(--muted); font-size: 12.5px;
+  color: var(--muted); font-size: 12.5px; line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .setup-ed.leer { border-color: var(--pink); color: var(--pink); }
+
+
+/* Einrichtung: nichts darf seitlich hinauslaufen */
+.setup-list, .setup-row { max-width: 100%; }
+.setup-row input { flex: 1 1 120px; }
+#screen-party-setup .turn-wrap, .setup-list { overflow-x: hidden; }
+@media (max-width: 380px) {
+  .mini-btn { width: 38px; height: 38px; font-size: 15px; }
+  .setup-row { gap: 5px; }
+}

@@ -172,8 +172,8 @@ function renderSetup() {
       edBtn.type = 'button';
       edBtn.className = 'setup-ed' + (eds.length ? '' : ' leer');
       edBtn.textContent = eds.length
-        ? (eds.length === 1 ? editionName(eds[0]) : eds.length + ' Editionen: ' + eds.map(editionName).join(', '))
-        : 'Editionen wählen';
+        ? (eds.length === 1 ? editionName(eds[0]) : eds.length + ' Editionen \u00b7 ' + eds.map(editionName).join(', '))
+        : 'Editionen wählen \u2026';
       edBtn.addEventListener('click', function () { openEditionSheet(i); });
       row.appendChild(edBtn);
     }

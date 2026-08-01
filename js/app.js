@@ -1900,6 +1900,8 @@ function showReveal(force) {
   var sheet = $('#revealSheet');
   sheet.classList.add('open');
   sheet.setAttribute('aria-hidden', 'false');
+  /* Immer oben beginnen, egal wie weit zuletzt gescrollt wurde */
+  scrolleNachOben(sheet);
   renderRevealLoading();
   var p = state.trackInfo ? Promise.resolve(state.trackInfo) : (state.infoPromise || Promise.resolve(null));
   p.then(function (info) {
@@ -1911,6 +1913,18 @@ function showReveal(force) {
       });
     }
   });
+}
+
+/* Setzt ein Blatt und seinen scrollbaren Inhalt auf den Anfang zurück */
+function scrolleNachOben(sheet) {
+  if (!sheet) return;
+  function hoch() {
+    sheet.scrollTop = 0;
+    var inner = sheet.querySelector('.sheet-scroll');
+    if (inner) inner.scrollTop = 0;
+  }
+  hoch();
+  requestAnimationFrame(hoch);   /* nochmal, sobald das Blatt sichtbar ist */
 }
 
 function hideReveal() {
