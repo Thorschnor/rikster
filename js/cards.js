@@ -1110,6 +1110,15 @@ function qrPdf(doc, doc_text, x, y, groesse) {
   }
 }
 
+/* ---------- Maße aus der Vorschau übernehmen ----------
+   In der Vorschau ist die Karte VORSCHAU_PX breit und steht für 50 mm.
+   mmAus() rechnet Vorschau-Pixel in Millimeter um, ptAus() zusätzlich
+   in Punkt - denn jsPDF erwartet Schriftgrößen in Punkt, nicht in mm.
+   Genau das war vorher falsch: Die Schrift kam um Faktor 2,83 zu klein. */
+var VORSCHAU_PX = 120;
+function mmAus(vorschauPx, kartenGroesseMm) { return vorschauPx / VORSCHAU_PX * kartenGroesseMm; }
+function ptAus(vorschauPx, kartenGroesseMm) { return mmAus(vorschauPx, kartenGroesseMm) * 72 / 25.4; }
+
 /* ---------- Kartenseiten in die PDF ---------- */
 function karteVornPdf(doc, song, x, y, s) {
   var d = deck.design;
@@ -1136,8 +1145,8 @@ function karteVornPdf(doc, song, x, y, s) {
     var lc = rgbStr(d.qrBorder);
     doc.setTextColor(lc[0], lc[1], lc[2]);
     doc.setFont('Montserrat', 'bold');
-    doc.setFontSize(6);
-    doc.text(String(d.label), x + s / 2, y + s - 3, { align: 'center' });
+    doc.setFontSize(ptAus(7, s));
+    doc.text(String(d.label), x + s / 2, y + s - mmAus(6, s), { align: 'center' });
   }
 }
 
@@ -1147,7 +1156,7 @@ function textMitKontur(doc, zeilen, cx, y, groesse, farbeText, konturAn, farbeKo
   if (konturAn) {
     var fk = rgbStr(farbeKontur);
     doc.setDrawColor(fk[0], fk[1], fk[2]);
-    doc.setLineWidth(groesse * 0.035);
+    doc.setLineWidth(groesse * 25.4 / 72 * 0.05);   /* Punkt -> mm */
     doc.setTextColor(ft[0], ft[1], ft[2]);
     zeilen.forEach(function (z, i) {
       doc.text(z, cx, y + i * zeilenhoehe, { align: 'center', renderingMode: 'fillThenStroke' });
@@ -1165,25 +1174,37 @@ function karteHintenPdf(doc, song, x, y, s, jahre) {
   doc.rect(x, y, s, s, 'F');
   doc.setFont('Montserrat', 'bold');
 
-  var breite = s - 6;
+  /* Größen 1:1 aus der Vorschau: Interpret/Titel 9 px, Jahr 34 px */
+  var ptText = ptAus(9, s);
+  var ptJahr = ptAus(34, s);
+  var zhText = mmAus(9 * 1.15, s);       /* Zeilenhöhe = Schriftgröße x 1.15 */
+  var breite = s - mmAus(16, s);
+
+  doc.setFontSize(ptText);
   var aZeilen = doc.splitTextToSize(String(song.artist || ''), breite).slice(0, 2);
   var tZeilen = doc.splitTextToSize(String(song.title || ''), breite).slice(0, 2);
-  var mitte = y + s / 2;
 
-  doc.setFontSize(3.6);
-  var aHoehe = aZeilen.length * 4.2;
-  textMitKontur(doc, aZeilen, x + s / 2, mitte - 9 - aHoehe + 4.2, 3.6, d.artistColor, d.artistOn, d.artistOutline, 4.2);
+  /* Senkrecht mittig wie in der Vorschau (Flexbox, zentriert) */
+  var hJahr = mmAus(34, s);
+  var abstand = mmAus(2, s);
+  var gesamt = aZeilen.length * zhText + hJahr + tZeilen.length * zhText + 2 * abstand;
+  var oben = y + (s - gesamt) / 2;
 
-  textMitKontur(doc, [String(song.year || '?')], x + s / 2, mitte + 5, 17, d.yearColor, d.yearOn, d.yearOutline, 0);
+  var cx = x + s / 2;
+  var yA = oben + zhText * 0.78;
+  textMitKontur(doc, aZeilen, cx, yA, ptText, d.artistColor, d.artistOn, d.artistOutline, zhText);
 
-  doc.setFontSize(3.6);
-  textMitKontur(doc, tZeilen, x + s / 2, mitte + 12, 3.6, d.titleColor, d.titleOn, d.titleOutline, 4.2);
+  var yJ = oben + aZeilen.length * zhText + abstand + hJahr * 0.78;
+  textMitKontur(doc, [String(song.year || '?')], cx, yJ, ptJahr, d.yearColor, d.yearOn, d.yearOutline, 0);
+
+  var yT = oben + aZeilen.length * zhText + abstand + hJahr + abstand + zhText * 0.78;
+  textMitKontur(doc, tZeilen, cx, yT, ptText, d.titleColor, d.titleOn, d.titleOutline, zhText);
 
   if (d.label) {
     var lc = rgbStr(d.titleColor);
     doc.setTextColor(lc[0], lc[1], lc[2]);
-    doc.setFontSize(5);
-    doc.text(String(d.label), x + s / 2, y + s - 3, { align: 'center' });
+    doc.setFontSize(ptAus(6, s));
+    doc.text(String(d.label), cx, y + s - mmAus(5, s), { align: 'center' });
   }
 }
 
