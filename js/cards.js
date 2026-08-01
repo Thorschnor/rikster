@@ -568,28 +568,49 @@ function onAddLinks() {
 function ladeTracks(ids) {
   toast(ids.length + (ids.length === 1 ? ' Song wird geladen \u2026' : ' Songs werden geladen \u2026'));
   var alle = [];
-  function block(i) {
+  var fehler = null;
+
+  /* Songs EINZELN abrufen. Der Sammelabruf /tracks?ids=... wird von
+     Spotify bei manchen Konten mit 403 abgelehnt, der Einzelabruf
+     /tracks/{id} funktioniert dagegen zuverlässig. */
+  function naechster(i) {
     if (i >= ids.length) return Promise.resolve();
-    return api('/tracks?ids=' + ids.slice(i, i + 50).join(',')).then(function (res) {
-      if (!res.ok) return readApiError(res).then(function (d) { throw new Error(d); });
+    return api('/tracks/' + ids[i]).then(function (res) {
+      if (!res.ok) {
+        if (!fehler) {
+          return readApiError(res).then(function (d) { fehler = d; return null; });
+        }
+        return null;
+      }
       return res.json();
-    }).then(function (j) {
-      (j.tracks || []).forEach(function (t) { if (t && t.id) alle.push(t); });
-      return block(i + 50);
+    }).then(function (t) {
+      if (t && t.id) alle.push(t);
+      return new Promise(function (r) { setTimeout(r, 60); }).then(function () { return naechster(i + 1); });
+    }).catch(function () {
+      return naechster(i + 1);
     });
   }
-  return block(0).then(function () {
+
+  return naechster(0).then(function () {
+    if (!alle.length) {
+      openModal({
+        title: 'Songs konnten nicht geladen werden',
+        text: 'Spotify hat den Abruf abgelehnt.' + (fehler ? '\n\nTechnik: ' + fehler : '') +
+          '\n\nPrüfe im Hauptmenü unter „Verbindungs-Check", ob dein Konto im Spotify-Dashboard freigeschaltet ist.',
+        primary: 'OK'
+      });
+      return;
+    }
     alle.forEach(function (t) { addSong(t, false); });
-    toast(alle.length + ' hinzugefügt \u2013 Jahre werden geprüft \u2026');
+    var fehlend = ids.length - alle.length;
+    toast(alle.length + ' hinzugefügt' + (fehlend ? ' (' + fehlend + ' nicht abrufbar)' : '') + ' \u2013 Jahre werden geprüft \u2026');
     return jahreNachziehen();
-  }).catch(function (e) {
-    openModal({ title: 'Songs konnten nicht geladen werden',
-      text: 'Bitte Verbindung prüfen.' + (e && e.message ? '\n\nTechnik: ' + e.message : ''), primary: 'OK' });
   });
 }
 
 function jahreNachziehen() {
   var offen = deck.songs.filter(function (s) { return !s.geprueft; });
+  if (!offen.length) return Promise.resolve();
   function naechster(i) {
     if (i >= offen.length) { toast('Fertig \u2013 Jahre geprüft'); return Promise.resolve(); }
     var s = offen[i];
@@ -603,34 +624,67 @@ function jahreNachziehen() {
 
 function ladePlaylist(pid) {
   toast('Playlist wird gelesen \u2026');
-  var alle = [];
-  function seite(off, art) {
-    return api('/playlists/' + pid + '/' + art + '?limit=50&offset=' + off).then(function (res) {
-      if (!res.ok) return readApiError(res).then(function (d) { throw { detail: d }; });
-      return res.json();
-    }).then(function (j) {
-      var items = (j && j.items) || [];
-      items.forEach(function (it) { var t = it && (it.track || it.item); if (t && t.id) alle.push(t); });
-      if (items.length === 50 && alle.length < 1000) return seite(off + 50, art);
-      return alle;
+  var letzterFehler = null;
+
+  function ueberApi(art) {
+    var alle = [];
+    function seite(off) {
+      return api('/playlists/' + pid + '/' + art + '?limit=50&offset=' + off).then(function (res) {
+        if (!res.ok) {
+          return readApiError(res).then(function (d) { letzterFehler = d + ' [' + art + ']'; throw new Error(d); });
+        }
+        return res.json();
+      }).then(function (j) {
+        var items = (j && j.items) || [];
+        items.forEach(function (it) {
+          var t = it && (it.track || it.item);
+          if (t && t.id) alle.push(t);
+        });
+        if (items.length === 50 && alle.length < 1000) return seite(off + 50);
+        if (!alle.length) throw new Error('leer');
+        return alle;
+      });
+    }
+    return seite(0);
+  }
+
+  /* Notweg ohne Playlist-Schnittstelle: Titelreihenfolge aus der
+     öffentlichen Embed-Seite lesen und die Songs einzeln abrufen. */
+  function ueberEmbed() {
+    if (typeof proxyFetch !== 'function') return Promise.reject(new Error('kein Proxy'));
+    return proxyFetch('https://open.spotify.com/embed/playlist/' + pid).then(function (html) {
+      var ids = [], re = /spotify:track:([A-Za-z0-9]{22})/g, m;
+      while ((m = re.exec(html)) !== null) if (ids.indexOf(m[1]) === -1) ids.push(m[1]);
+      if (!ids.length) throw new Error('nichts gefunden');
+      return ids;
     });
   }
-  seite(0, 'items').catch(function () { return seite(0, 'tracks'); }).then(function (liste) {
-    if (!liste.length) throw { detail: 'Playlist leer oder nicht lesbar' };
-    liste.forEach(function (t) { addSong(t, false); });
-    $('#cardLinks').value = '';
-    toast(liste.length + ' Songs übernommen \u2013 Jahre werden geprüft \u2026');
-    return jahreNachziehen();
-  }).catch(function (e) {
-    openModal({
-      title: 'Playlist nicht lesbar',
-      text: 'Spotify hat den Zugriff auf die Playlist abgelehnt.' + (e && e.detail ? '\n\nTechnik: ' + e.detail : '') +
-        '\n\nAusweg: In der Spotify-App alle Titel markieren, kopieren und hier einfügen \u2013 einzelne Song-Links gehen immer.',
-      primary: 'OK'
-    });
-  });
-}
 
+  ueberApi('items')
+    .catch(function () { return ueberApi('tracks'); })
+    .then(function (liste) {
+      liste.forEach(function (t) { addSong(t, false); });
+      $('#cardLinks').value = '';
+      toast(liste.length + ' Songs übernommen \u2013 Jahre werden geprüft \u2026');
+      return jahreNachziehen();
+    })
+    .catch(function () {
+      /* Beide Wege über die Schnittstelle gescheitert -> Embed versuchen */
+      return ueberEmbed().then(function (ids) {
+        $('#cardLinks').value = '';
+        toast(ids.length + ' Titel gefunden \u2013 werden geladen \u2026');
+        return ladeTracks(ids);
+      }).catch(function () {
+        openModal({
+          title: 'Playlist nicht lesbar',
+          text: 'Spotify hat den Zugriff auf die Playlist abgelehnt.' +
+            (letzterFehler ? '\n\nTechnik: ' + letzterFehler : '') +
+            '\n\nAusweg: Öffne die Playlist in der Spotify-App, markiere alle Titel (langes Tippen, dann „Alle auswählen"), kopiere sie und füge sie hier ein. Einzelne Song-Links funktionieren immer.',
+          primary: 'OK'
+        });
+      });
+    });
+}
 
 /* ============================================================
    FARBWÄHLER – eigene Palette statt des Systemdialogs
@@ -1184,20 +1238,25 @@ function karteHintenPdf(doc, song, x, y, s, jahre) {
   var aZeilen = doc.splitTextToSize(String(song.artist || ''), breite).slice(0, 2);
   var tZeilen = doc.splitTextToSize(String(song.title || ''), breite).slice(0, 2);
 
-  /* Senkrecht mittig wie in der Vorschau (Flexbox, zentriert) */
+  /* Das Jahr sitzt IMMER exakt in der Kartenmitte - egal wie viele
+     Zeilen Interpret und Titel brauchen. Die beiden wachsen nach
+     außen: der Interpret nach oben, der Titel nach unten. */
+  var cx = x + s / 2;
+  var mitte = y + s / 2;
   var hJahr = mmAus(34, s);
   var abstand = mmAus(2, s);
-  var gesamt = aZeilen.length * zhText + hJahr + tZeilen.length * zhText + 2 * abstand;
-  var oben = y + (s - gesamt) / 2;
 
-  var cx = x + s / 2;
-  var yA = oben + zhText * 0.78;
-  textMitKontur(doc, aZeilen, cx, yA, ptText, d.artistColor, d.artistOn, d.artistOutline, zhText);
-
-  var yJ = oben + aZeilen.length * zhText + abstand + hJahr * 0.78;
+  /* Grundlinie des Jahres: optische Mitte der Ziffern */
+  var yJ = mitte + hJahr * 0.36;   /* Wert aus Messung: Ziffernmitte trifft die Kartenmitte */
   textMitKontur(doc, [String(song.year || '?')], cx, yJ, ptJahr, d.yearColor, d.yearOn, d.yearOutline, 0);
 
-  var yT = oben + aZeilen.length * zhText + abstand + hJahr + abstand + zhText * 0.78;
+  /* Interpret nach oben stapeln: letzte Zeile direkt über dem Jahr */
+  var yAunten = mitte - hJahr * 0.5 - abstand;
+  var yA = yAunten - (aZeilen.length - 1) * zhText;
+  textMitKontur(doc, aZeilen, cx, yA, ptText, d.artistColor, d.artistOn, d.artistOutline, zhText);
+
+  /* Titel nach unten */
+  var yT = mitte + hJahr * 0.5 + abstand + zhText * 0.78;
   textMitKontur(doc, tZeilen, cx, yT, ptText, d.titleColor, d.titleOn, d.titleOutline, zhText);
 
   if (d.label) {
