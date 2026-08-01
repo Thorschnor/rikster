@@ -463,7 +463,6 @@ function verfeinereJahr(eintrag) {
 function anspielen(t) {
   var mitte = Math.round((t.duration_ms || 180000) / 2);
   activateAudio();
-  toast('Spielt ab der Mitte \u2026');
   playTrack(t.id, mitte).catch(function () { toast('Anspielen hat nicht geklappt'); });
 }
 
@@ -475,6 +474,7 @@ function auswahlAnzeigen() {
 }
 
 function suchListeSchliessen() {
+  stopPlayback();
   auswahl = [];
   $('#searchResults').hidden = true;
   $('#srActions').hidden = true;
@@ -534,6 +534,7 @@ function onSearch() {
 
 function ausgewaehlteHinzufuegen() {
   if (!auswahl.length) return;
+  stopPlayback();                 /* angespielten Song beenden */
   var liste = auswahl.slice();
   liste.forEach(function (t) { addSong(t, false); });
   toast(liste.length === 1 ? 'Song hinzugefügt \u2013 Jahr wird geprüft \u2026'
@@ -628,6 +629,75 @@ function ladePlaylist(pid) {
   });
 }
 
+
+/* ============================================================
+   FARBWÄHLER – eigene Palette statt des Systemdialogs
+   ------------------------------------------------------------
+   Alle Farbtöne mit voller Sättigung, dazu je eine hellere und
+   eine dunklere Reihe sowie Grautöne von Weiß bis Schwarz.
+   ============================================================ */
+function hslHex(h, s, l) {
+  s /= 100; l /= 100;
+  var k = function (n) { return (n + h / 30) % 12; };
+  var a = s * Math.min(l, 1 - l);
+  var f = function (n) {
+    var v = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return Math.round(255 * v).toString(16).padStart(2, '0');
+  };
+  return '#' + f(0) + f(8) + f(4);
+}
+
+function palette() {
+  var toene = [0, 16, 32, 45, 60, 90, 120, 150, 170, 190, 210, 230, 260, 285, 310, 330, 345];
+  var out = ['#FFFFFF', '#E4E8F0', '#B9C0CC', '#8A93A3', '#5A6172', '#2A2F3A', '#0B0E14'];
+  toene.forEach(function (t) { out.push(hslHex(t, 100, 72)); });   /* hell */
+  toene.forEach(function (t) { out.push(hslHex(t, 100, 52)); });   /* voll */
+  toene.forEach(function (t) { out.push(hslHex(t, 100, 34)); });   /* dunkel */
+  return out;
+}
+
+var farbZiel = null;   /* { id, key } */
+
+function openColorSheet(id, key, titel) {
+  farbZiel = { id: id, key: key };
+  $('#colorTitle').textContent = titel || 'Farbe wählen';
+  var grid = $('#colorGrid');
+  grid.innerHTML = '';
+  var aktuell = String(deck.design[key] || '').toUpperCase();
+  palette().forEach(function (f) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'color-swatch' + (f.toUpperCase() === aktuell ? ' on' : '');
+    b.style.background = f;
+    b.setAttribute('aria-label', 'Farbe ' + f);
+    b.addEventListener('click', function () {
+      setzeDesign(key, f);
+      var knopf = $('#' + id);
+      if (knopf) knopf.style.background = f;
+      closeColorSheet();
+    });
+    grid.appendChild(b);
+  });
+  var s = $('#colorSheet');
+  s.classList.add('open');
+  s.setAttribute('aria-hidden', 'false');
+}
+
+function closeColorSheet() {
+  var s = $('#colorSheet');
+  s.classList.remove('open');
+  s.setAttribute('aria-hidden', 'true');
+  farbZiel = null;
+}
+
+/* Farbknopf mit seiner Einstellung verbinden */
+function bindeFarbe(id, key, titel) {
+  var knopf = $('#' + id);
+  if (!knopf) return;
+  knopf.style.background = deck.design[key];
+  knopf.addEventListener('click', function () { openColorSheet(id, key, titel); });
+}
+
 /* ============================================================
    DESIGN-BEDIENUNG
    ============================================================ */
@@ -642,21 +712,21 @@ function applyDesignInputs() {
     });
   }
   sel.value = d.frame;
-  $('#dsQrBg').value = d.qrBg;
+  $('#dsQrBg').style.background = d.qrBg;
   $('#dsQrSize').value = d.qrSize;
   $('#dsQrSizeVal').textContent = d.qrSize + '%';
-  $('#dsQrBorder').value = d.qrBorder;
+  $('#dsQrBorder').style.background = d.qrBorder;
   $('#dsQrBorderW').value = d.qrBorderW;
   $('#dsQrBorderWVal').textContent = String(d.qrBorderW);
   $('#dsLabel').value = d.label || '';
   $('#dsHitster').setAttribute('aria-checked', d.hitster ? 'true' : 'false');
-  $('#dsSolBg').value = d.solBg;
+  $('#dsSolBg').style.background = d.solBg;
   $('#rowSolBg').style.display = d.hitster ? 'none' : '';
   ['artist', 'year', 'title'].forEach(function (k) {
     var gross = k.charAt(0).toUpperCase() + k.slice(1);
-    $('#ds' + gross + 'Color').value = d[k + 'Color'];
+    $('#ds' + gross + 'Color').style.background = d[k + 'Color'];
     $('#ds' + gross + 'On').setAttribute('aria-checked', d[k + 'On'] ? 'true' : 'false');
-    $('#ds' + gross + 'Outline').value = d[k + 'Outline'];
+    $('#ds' + gross + 'Outline').style.background = d[k + 'Outline'];
   });
   $('#dsBorders').setAttribute('aria-checked', d.borders ? 'true' : 'false');
   $('#dsImageName').textContent = deckImage ? 'Eigenes Bild aktiv' : '';
@@ -788,6 +858,7 @@ document.addEventListener('DOMContentLoaded', function () {
     s.classList.add('open');
     s.setAttribute('aria-hidden', 'false');
   });
+  $('#btnColorClose').addEventListener('click', closeColorSheet);
   $('#btnDesignClose').addEventListener('click', function () {
     var s = $('#designSheet');
     s.classList.remove('open');
@@ -795,12 +866,12 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   $('#dsFrame').addEventListener('change', function () { setzeDesign('frame', this.value); });
-  $('#dsQrBg').addEventListener('input', function () { setzeDesign('qrBg', this.value); });
+  bindeFarbe('dsQrBg', 'qrBg', 'Hintergrund der QR-Seite');
   $('#dsQrSize').addEventListener('input', function () {
     $('#dsQrSizeVal').textContent = this.value + '%';
     setzeDesign('qrSize', parseInt(this.value, 10));
   });
-  $('#dsQrBorder').addEventListener('input', function () { setzeDesign('qrBorder', this.value); });
+  bindeFarbe('dsQrBorder', 'qrBorder', 'Kontur um den QR-Code');
   $('#dsQrBorderW').addEventListener('input', function () {
     $('#dsQrBorderWVal').textContent = this.value;
     setzeDesign('qrBorderW', parseInt(this.value, 10));
@@ -813,12 +884,13 @@ document.addEventListener('DOMContentLoaded', function () {
     $('#rowSolBg').style.display = an ? 'none' : '';
     setzeDesign('hitster', an);
   });
-  $('#dsSolBg').addEventListener('input', function () { setzeDesign('solBg', this.value); });
+  bindeFarbe('dsSolBg', 'solBg', 'Hintergrund der Lösungsseite');
 
   ['artist', 'year', 'title'].forEach(function (k) {
     var gross = k.charAt(0).toUpperCase() + k.slice(1);
-    $('#ds' + gross + 'Color').addEventListener('input', function () { setzeDesign(k + 'Color', this.value); });
-    $('#ds' + gross + 'Outline').addEventListener('input', function () { setzeDesign(k + 'Outline', this.value); });
+    var bez = { artist: 'Interpret', year: 'Jahr', title: 'Titel' }[k];
+    bindeFarbe('ds' + gross + 'Color', k + 'Color', 'Schriftfarbe: ' + bez);
+    bindeFarbe('ds' + gross + 'Outline', k + 'Outline', 'Konturfarbe: ' + bez);
     $('#ds' + gross + 'On').addEventListener('click', function () {
       var an = !deck.design[k + 'On'];
       this.setAttribute('aria-checked', an ? 'true' : 'false');

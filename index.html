@@ -351,11 +351,11 @@
         <label class="design-row"><span>Rahmen-Design</span>
           <select id="dsFrame"></select>
         </label>
-        <label class="design-row"><span>Hintergrundfarbe</span><input type="color" id="dsQrBg" value="#0B0E14"></label>
+        <div class="design-row"><span>Hintergrundfarbe</span><button class="colorbtn" id="dsQrBg" aria-label="Farbe wählen"></button></div>
         <label class="design-row"><span>QR-Größe</span>
           <span class="design-range"><input type="range" id="dsQrSize" min="30" max="70" step="1" value="46"><b id="dsQrSizeVal">46%</b></span>
         </label>
-        <label class="design-row"><span>Kontur um den QR</span><input type="color" id="dsQrBorder" value="#FFFFFF"></label>
+        <div class="design-row"><span>Kontur um den QR</span><button class="colorbtn" id="dsQrBorder" aria-label="Farbe wählen"></button></div>
         <label class="design-row"><span>Konturdicke</span>
           <span class="design-range"><input type="range" id="dsQrBorderW" min="0" max="8" step="1" value="3"><b id="dsQrBorderWVal">3</b></span>
         </label>
@@ -377,29 +377,29 @@
         <div class="design-row"><span>Hitster-Jahresfarben</span>
           <button class="switch" id="dsHitster" role="switch" aria-checked="true"><span class="knob"></span></button>
         </div>
-        <label class="design-row" id="rowSolBg"><span>Hintergrundfarbe</span><input type="color" id="dsSolBg" value="#FFFFFF"></label>
+        <div class="design-row" id="rowSolBg"><span>Hintergrundfarbe</span><button class="colorbtn" id="dsSolBg" aria-label="Farbe wählen"></button></div>
         <div class="design-sub">Interpret</div>
-        <label class="design-row"><span>Schriftfarbe</span><input type="color" id="dsArtistColor" value="#0B0E14"></label>
+        <div class="design-row"><span>Schriftfarbe</span><button class="colorbtn" id="dsArtistColor" aria-label="Farbe wählen"></button></div>
         <div class="design-row"><span>Kontur</span>
           <span class="design-range">
             <button class="switch small" id="dsArtistOn" role="switch" aria-checked="false"><span class="knob"></span></button>
-            <input type="color" id="dsArtistOutline" value="#FFFFFF">
+            <button class="colorbtn" id="dsArtistOutline" aria-label="Farbe wählen"></button>
           </span>
         </div>
         <div class="design-sub">Jahr</div>
-        <label class="design-row"><span>Schriftfarbe</span><input type="color" id="dsYearColor" value="#0B0E14"></label>
+        <div class="design-row"><span>Schriftfarbe</span><button class="colorbtn" id="dsYearColor" aria-label="Farbe wählen"></button></div>
         <div class="design-row"><span>Kontur</span>
           <span class="design-range">
             <button class="switch small" id="dsYearOn" role="switch" aria-checked="false"><span class="knob"></span></button>
-            <input type="color" id="dsYearOutline" value="#FFFFFF">
+            <button class="colorbtn" id="dsYearOutline" aria-label="Farbe wählen"></button>
           </span>
         </div>
         <div class="design-sub">Titel</div>
-        <label class="design-row"><span>Schriftfarbe</span><input type="color" id="dsTitleColor" value="#0B0E14"></label>
+        <div class="design-row"><span>Schriftfarbe</span><button class="colorbtn" id="dsTitleColor" aria-label="Farbe wählen"></button></div>
         <div class="design-row"><span>Kontur</span>
           <span class="design-range">
             <button class="switch small" id="dsTitleOn" role="switch" aria-checked="false"><span class="knob"></span></button>
-            <input type="color" id="dsTitleOutline" value="#FFFFFF">
+            <button class="colorbtn" id="dsTitleOutline" aria-label="Farbe wählen"></button>
           </span>
         </div>
       </div>
@@ -425,6 +425,14 @@
       <p class="cards-hint">Aus welchen Editionen sollen die Songs kommen? Mehrfachauswahl möglich.</p>
       <div class="ed-list" id="edList"></div>
       <button class="btn btn-amber" id="btnEdClose">Fertig</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="colorSheet" aria-hidden="true">
+    <div class="sheet-scroll">
+      <h2 class="sheet-title" id="colorTitle">Farbe wählen</h2>
+      <div class="color-grid" id="colorGrid"></div>
+      <button class="btn btn-ghost" id="btnColorClose">Abbrechen</button>
     </div>
   </div>
 
