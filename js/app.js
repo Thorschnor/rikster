@@ -346,76 +346,36 @@ function logout() {
 }
 
 /* Web-API-Helfer: hängt Token an, wiederholt einmal nach 401 */
-/* ---------- Anfragen an Spotify: Tempo drosseln und 429 abfangen ----------
-   Zu viele Anfragen in kurzer Zeit beantwortet Spotify mit
-   "429 Too Many Requests". Deshalb laufen alle Abfragen durch eine
-   Warteschlange mit Mindestabstand, und bei 429 wartet die App genau
-   so lange, wie Spotify es im Kopf der Antwort verlangt.
-   Wiedergabe-Befehle (opts.sofort) umgehen die Warteschlange, damit
-   Abspielen und Pausieren ohne Verzögerung reagieren. */
-var apiKette = Promise.resolve();
-/* Spotify rechnet über ein rollendes 30-Sekunden-Fenster. Für Apps im
-   Entwicklungsmodus ist die Grenze niedrig, deshalb starten wir bewusst
-   ruhig. Bremst Spotify trotzdem, erhöht die App den Abstand dauerhaft
-   und merkt sich das auch über einen Neustart hinweg. */
-var API_ABSTAND = 340;
-(function () {
-  try {
-    var g = parseInt(localStorage.getItem('rikster_apitempo'), 10);
-    if (isFinite(g) && g > API_ABSTAND && g <= 2000) API_ABSTAND = g;
-  } catch (e) { /* egal */ }
-})();
-
-var bremsGemeldet = false;
-function apiLangsamer() {
-  API_ABSTAND = Math.min(2000, Math.round(API_ABSTAND * 1.6));
-  try { localStorage.setItem('rikster_apitempo', String(API_ABSTAND)); } catch (e) { /* egal */ }
-  if (!bremsGemeldet && typeof toast === 'function') {
-    bremsGemeldet = true;
-    toast('Spotify bremst \u2013 die App macht automatisch langsamer weiter');
-  }
-}
-
-function apiRoh(path, opts) {
+/* ---------- Anfragen an Spotify ----------
+   Direkter Aufruf ohne Warteschlange. Bei 401 wird das Token
+   erneuert, bei 429 kurz gewartet und einmal nachgefasst -
+   mehr nicht, damit nichts unnötig ausgebremst wird. */
+function api(path, opts) {
+  opts = opts || {};
   function doFetch(token) {
     var headers = { Authorization: 'Bearer ' + token };
     if (opts.body) headers['Content-Type'] = 'application/json';
     return fetch(API_BASE + path, { method: opts.method || 'GET', headers: headers, body: opts.body });
   }
-  function mitWiederholung(token, versuch) {
+  return ensureToken().then(function (token) {
     return doFetch(token).then(function (res) {
       if (res.status === 401) {
         return refreshTokens().then(function () {
           return doFetch(localStorage.getItem(LS.access));
         });
       }
-      if (res.status === 429 && versuch < 6) {
+      if (res.status === 429) {
         var warte = 2;
         try {
-          var kopf = res.headers && res.headers.get && res.headers.get('Retry-After');
-          var n = parseInt(kopf, 10);
-          if (isFinite(n) && n > 0) warte = n;
+          var n = parseInt(res.headers && res.headers.get && res.headers.get('Retry-After'), 10);
+          if (isFinite(n) && n > 0) warte = Math.min(n, 10);
         } catch (e) { /* egal */ }
-        if (warte > 60) warte = 60;
-        console.warn('Spotify bremst (429) \u2013 warte ' + warte + ' s');
-        apiLangsamer();
         return new Promise(function (r) { setTimeout(r, warte * 1000); })
-          .then(function () { return mitWiederholung(token, versuch + 1); });
+          .then(function () { return doFetch(localStorage.getItem(LS.access)); });
       }
       return res;
     });
-  }
-  return ensureToken().then(function (token) { return mitWiederholung(token, 0); });
-}
-
-function api(path, opts) {
-  opts = opts || {};
-  if (opts.sofort) return apiRoh(path, opts);
-  var ergebnis = apiKette.then(function () { return apiRoh(path, opts); });
-  apiKette = ergebnis.catch(function () { /* egal */ }).then(function () {
-    return new Promise(function (r) { setTimeout(r, API_ABSTAND); });
   });
-  return ergebnis;
 }
 
 /* ============================================================
@@ -524,7 +484,7 @@ function playTrack(trackId, positionMs) {
   var body = JSON.stringify({ uris: ['spotify:track:' + trackId], position_ms: Math.max(0, Math.round(positionMs || 0)) });
   return initPlayback().then(function (mode) {
     if (mode === 'sdk' && state.sdkReady && state.sdkDeviceId) {
-      return api('/me/player/play?device_id=' + state.sdkDeviceId, { method: 'PUT', body: body, sofort: true })
+      return api('/me/player/play?device_id=' + state.sdkDeviceId, { method: 'PUT', body: body })
         .then(function (res) {
           if (res.ok || res.status === 204) { verifySdkAudio(body); return true; }
           return playRemote(body, state.sdkDeviceId);
@@ -535,7 +495,7 @@ function playTrack(trackId, positionMs) {
 }
 
 function playRemote(body, excludeId) {
-  return api('/me/player/devices', { sofort: true }).then(function (res) {
+  return api('/me/player/devices').then(function (res) {
     if (!res.ok) {
       return readApiError(res).then(function (d) {
         throw { code: 'NO_DEVICE', why: 'Ger\u00e4te-Abfrage: ' + d };
@@ -550,7 +510,7 @@ function playRemote(body, excludeId) {
     var dev = null;
     for (var i = 0; i < devices.length; i++) { if (devices[i].is_active) { dev = devices[i]; break; } }
     if (!dev) dev = devices[0];
-    return api('/me/player/play?device_id=' + dev.id, { method: 'PUT', body: body, sofort: true });
+    return api('/me/player/play?device_id=' + dev.id, { method: 'PUT', body: body });
   }).then(function (res) {
     if (res === true || res.ok || res.status === 204) return true;
     if (res.status === 404) throw { code: 'NO_DEVICE' };
@@ -593,7 +553,7 @@ function stopPlayback() {
     state.sdkPlayer.pause().catch(function () { /* egal */ });
     return;
   }
-  api('/me/player/pause', { method: 'PUT', sofort: true }).catch(function () { /* egal */ });
+  api('/me/player/pause', { method: 'PUT' }).catch(function () { /* egal */ });
 }
 
 /* ============================================================
@@ -1109,11 +1069,9 @@ function pruefeJahr(artist, title, spotifyJahr) {
         if (mb) return { jahr: mb, quelle: 'MusicBrainz' };
         if (wiki) return { jahr: wiki, quelle: 'Wikipedia' };
 
-        return findOriginalYear(artist, title).catch(function () { return null; })
-          .then(function (spot) {
-            if (spot) return { jahr: spot, quelle: 'Spotify' };
-            return null;
-          });
+        /* Kein weiterer Spotify-Aufruf: Die Suche dort lieferte ohnehin
+           meist Remaster-Jahre und kostete viele Anfragen. */
+        return null;
       });
     });
   }).then(function (r) {
@@ -2547,7 +2505,7 @@ function syncPlayback() {
     }).catch(function () { /* egal */ });
     return;
   }
-  api('/me/player', { sofort: true }).then(function (res) {
+  api('/me/player').then(function (res) {
     if (!res.ok) return null;
     return safeJson(res);
   }).then(function (j) {
@@ -2594,7 +2552,7 @@ function togglePlayPause() {
     p.catch(function () { toast('Wiedergabe reagiert gerade nicht'); });
     return;
   }
-  api('/me/player/' + (willPause ? 'pause' : 'play'), { method: 'PUT', sofort: true }).then(function (res) {
+  api('/me/player/' + (willPause ? 'pause' : 'play'), { method: 'PUT' }).then(function (res) {
     if (!res.ok && res.status !== 204) toast('Wiedergabe reagiert gerade nicht');
   }).catch(function () { toast('Wiedergabe reagiert gerade nicht'); });
 }
@@ -2610,7 +2568,7 @@ function seekTo(ms) {
     state.sdkPlayer.seek(ziel).catch(function () { /* egal */ });
     return;
   }
-  api('/me/player/seek?position_ms=' + ziel, { method: 'PUT', sofort: true }).catch(function () { /* egal */ });
+  api('/me/player/seek?position_ms=' + ziel, { method: 'PUT' }).catch(function () { /* egal */ });
 }
 
 function restartTrack() {
@@ -2709,6 +2667,9 @@ function registerSW() {
 
 function boot() {
   registerSW();
+  /* Falls von einer früheren Fassung ein Bremswert gespeichert wurde:
+     entfernen, sonst bleibt die App dauerhaft langsam. */
+  try { localStorage.removeItem('rikster_apitempo'); } catch (e) { /* egal */ }
   applyAssists(localStorage.getItem(LS.assists) !== '0', false);
   applyControls(localStorage.getItem(LS.controls) === '1', false);
 

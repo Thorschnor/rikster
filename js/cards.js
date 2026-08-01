@@ -740,10 +740,9 @@ function jahreNachziehen() {
     }
     var s = offen[i];
     return verfeinereJahr(s).catch(function () { /* egal */ }).then(function () {
-      s.geprueft = true;
+      s.geprueft = true; deckSave();
       fsZeige('Jahreszahlen werden geprüft \u2026', i + 1, offen.length);
-      /* Keine zusätzliche Pause nötig - die Abfragen bremsen sich selbst */
-      return new Promise(function (r) { setTimeout(r, 20); }).then(function () { return naechster(i + 1); });
+      return new Promise(function (r) { setTimeout(r, 120); }).then(function () { return naechster(i + 1); });
     });
   }
   return naechster(0);
