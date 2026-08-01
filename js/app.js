@@ -25,7 +25,7 @@
 var CFG = window.RIKSTER_CONFIG || {};
 var CLIENT_ID = String(CFG.SPOTIFY_CLIENT_ID || '').trim();
 var REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
-var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative';
+var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
 var API_BASE = 'https://api.spotify.com/v1';
 var HITSTER_DB = 'https://raw.githubusercontent.com/andygruber/songseeker-hitster-playlists/main/';
 var CORS_PROXIES = [
@@ -254,7 +254,6 @@ function login() {
 }
 
 function saveTokens(data) {
-  if (data.scope) { try { localStorage.setItem('rikster_scopes', data.scope); } catch (e) { /* egal */ } }
   if (data.access_token) localStorage.setItem(LS.access, data.access_token);
   if (data.refresh_token) localStorage.setItem(LS.refresh, data.refresh_token);
   var ttl = (data.expires_in || 3600) - 60;
@@ -312,23 +311,6 @@ function ensureToken() {
   return Promise.reject(new Error('not-logged-in'));
 }
 
-/* Ein aufgefrischtes Token behält die alten Berechtigungen. Für neue
-   Rechte - etwa zum Lesen von Playlists - ist eine komplett neue
-   Anmeldung nötig. */
-function hasPlaylistScope() {
-  var s = '';
-  try { s = localStorage.getItem('rikster_scopes') || ''; } catch (e) { /* egal */ }
-  return s.indexOf('playlist-read-private') !== -1;
-}
-
-function reauthorize() {
-  localStorage.removeItem(LS.access);
-  localStorage.removeItem(LS.refresh);
-  localStorage.removeItem(LS.expires);
-  try { localStorage.removeItem('rikster_scopes'); } catch (e) { /* egal */ }
-  login();
-}
-
 function isLoggedIn() {
   return Boolean(localStorage.getItem(LS.access) || localStorage.getItem(LS.refresh));
 }
@@ -346,10 +328,6 @@ function logout() {
 }
 
 /* Web-API-Helfer: hängt Token an, wiederholt einmal nach 401 */
-/* ---------- Anfragen an Spotify ----------
-   Direkter Aufruf ohne Warteschlange. Bei 401 wird das Token
-   erneuert, bei 429 kurz gewartet und einmal nachgefasst -
-   mehr nicht, damit nichts unnötig ausgebremst wird. */
 function api(path, opts) {
   opts = opts || {};
   function doFetch(token) {
@@ -359,21 +337,10 @@ function api(path, opts) {
   }
   return ensureToken().then(function (token) {
     return doFetch(token).then(function (res) {
-      if (res.status === 401) {
-        return refreshTokens().then(function () {
-          return doFetch(localStorage.getItem(LS.access));
-        });
-      }
-      if (res.status === 429) {
-        var warte = 2;
-        try {
-          var n = parseInt(res.headers && res.headers.get && res.headers.get('Retry-After'), 10);
-          if (isFinite(n) && n > 0) warte = Math.min(n, 10);
-        } catch (e) { /* egal */ }
-        return new Promise(function (r) { setTimeout(r, warte * 1000); })
-          .then(function () { return doFetch(localStorage.getItem(LS.access)); });
-      }
-      return res;
+      if (res.status !== 401) return res;
+      return refreshTokens().then(function () {
+        return doFetch(localStorage.getItem(LS.access));
+      });
     });
   });
 }
@@ -885,24 +852,6 @@ function jahrAusDatenbank(artist, title) {
   }).catch(function () { return null; });
 }
 
-/* Auch Wikipedia mag keine Anfrageflut - eigene Warteschlange */
-var wikiKette = Promise.resolve();
-function wikiAnfrage(url) {
-  var ergebnis = wikiKette.then(function () {
-    return fetchWithTimeout(url, 9000).then(function (r) {
-      if (r.status === 429) {
-        return new Promise(function (res) { setTimeout(res, 3000); })
-          .then(function () { return fetchWithTimeout(url, 9000); });
-      }
-      return r;
-    });
-  });
-  wikiKette = ergebnis.catch(function () { /* egal */ }).then(function () {
-    return new Promise(function (r) { setTimeout(r, 220); });
-  });
-  return ergebnis;
-}
-
 /* 2) Wikipedia: Erscheinungsjahr aus dem Songartikel */
 function jahrAusWikipedia(artist, title) {
   var t = cleanTitle(title);
@@ -912,7 +861,7 @@ function jahrAusWikipedia(artist, title) {
     var q = '"' + t.replace(/"/g, '') + '" ' + a + (lang === 'de' ? ' Lied' : ' song');
     var url = 'https://' + lang + '.wikipedia.org/w/api.php?action=query&list=search&format=json&formatversion=2&origin=*&srlimit=4&srsearch=' +
       encodeURIComponent(q);
-    return wikiAnfrage(url).then(function (r) {
+    return fetchWithTimeout(url, 9000).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (j) {
       var hits = (j && j.query && j.query.search) || [];
@@ -929,7 +878,7 @@ function jahrAusWikipedia(artist, title) {
     if (!treffer) return null;
     var url = 'https://' + treffer.lang + '.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exintro=1&redirects=1&format=json&formatversion=2&origin=*&titles=' +
       encodeURIComponent(treffer.titel);
-    return wikiAnfrage(url).then(function (r) {
+    return fetchWithTimeout(url, 9000).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (j) {
       var p = j && j.query && j.query.pages && j.query.pages[0];
@@ -953,132 +902,33 @@ function jahrAusWikipedia(artist, title) {
 }
 
 /* Alles zusammenführen */
-/* ---------- MusicBrainz: erste Veröffentlichung einer Aufnahme ----------
-   MusicBrainz führt zu jeder Aufnahme das Datum der ERSTEN
-   Veröffentlichung. Remaster, Neuauflagen und Compilations ändern
-   daran nichts - genau das brauchen wir fürs Spiel.
-   MusicBrainz bittet um höchstens eine Anfrage pro Sekunde,
-   deshalb laufen alle Abfragen durch eine Warteschlange. */
-var mbWarteschlange = Promise.resolve();
-var MB_ABSTAND = 1100;
-
-function mbAnfrage(url) {
-  var ergebnis = mbWarteschlange.then(function () {
-    return fetchWithTimeout(url, 12000).then(function (r) {
-      if (r.status === 503) {                       /* zu schnell - einmal nachfassen */
-        return new Promise(function (res) { setTimeout(res, 2500); })
-          .then(function () { return fetchWithTimeout(url, 12000); });
-      }
-      return r;
-    }).then(function (r) {
-      if (!r.ok) throw new Error('mb ' + r.status);
-      return r.json();
-    });
-  });
-  /* Nächste Anfrage erst nach der Wartezeit starten */
-  mbWarteschlange = ergebnis.catch(function () { /* egal */ }).then(function () {
-    return new Promise(function (res) { setTimeout(res, MB_ABSTAND); });
-  });
-  return ergebnis;
-}
-
-function jahrAusMusicBrainz(artist, title) {
-  var t = cleanTitle(title);
-  var a = mainArtist(artist);
-  if (!t || !a) return Promise.resolve(null);
-
-  var q = 'recording:"' + t.replace(/"/g, '') + '" AND artist:"' + a.replace(/"/g, '') + '"';
-  var url = 'https://musicbrainz.org/ws/2/recording/?fmt=json&limit=25&query=' + encodeURIComponent(q);
-
-  return mbAnfrage(url).then(function (j) {
-    var treffer = (j && j.recordings) || [];
-    var nt = normalize(t), na = normalize(a);
-    var jahre = [];
-
-    treffer.forEach(function (rec) {
-      if (rec.score && rec.score < 85) return;
-      /* Titel muss übereinstimmen - sonst erwischen wir ein anderes Stück */
-      var rt = normalize(cleanTitle(rec.title));
-      if (rt !== nt && rt.indexOf(nt) === -1 && nt.indexOf(rt) === -1) return;
-      /* Interpret muss übereinstimmen */
-      var passt = (rec['artist-credit'] || []).some(function (ac) {
-        var n = normalize(ac.artist && ac.artist.name);
-        return n === na || n.indexOf(na) !== -1 || na.indexOf(n) !== -1;
-      });
-      if (!passt) return;
-
-      function merke(datum) {
-        var y = parseInt(String(datum || '').slice(0, 4), 10);
-        if (isFinite(y) && y >= 1900 && y <= 2100) jahre.push(y);
-      }
-      merke(rec['first-release-date']);
-      (rec.releases || []).forEach(function (rel) {
-        merke(rel.date);
-        if (rel['release-group']) merke(rel['release-group']['first-release-date']);
-      });
-    });
-
-    if (!jahre.length) return null;
-    jahre.sort(function (x, y) { return x - y; });
-    return jahre[0];
-  }).catch(function () { return null; });
-}
-
-/* ---------- Gemerkte Ergebnisse ---------- */
-function jahrCacheKey(artist, title) {
-  return normalize(mainArtist(artist)) + '|' + normalize(cleanTitle(title));
-}
-function jahrCacheLies(artist, title) {
-  try {
-    var c = JSON.parse(localStorage.getItem('rikster_jahre') || '{}');
-    return c[jahrCacheKey(artist, title)] || null;
-  } catch (e) { return null; }
-}
-function jahrCacheSchreib(artist, title, wert) {
-  try {
-    var c = JSON.parse(localStorage.getItem('rikster_jahre') || '{}');
-    var schluessel = Object.keys(c);
-    if (schluessel.length > 3000) delete c[schluessel[0]];     /* nicht endlos wachsen lassen */
-    c[jahrCacheKey(artist, title)] = wert;
-    localStorage.setItem('rikster_jahre', JSON.stringify(c));
-  } catch (e) { /* egal */ }
-}
-
-/* ---------- Alle Quellen zusammenführen ----------
-   Reihenfolge nach Verlässlichkeit:
-   1. Hitster-Kartendatenbank - von Menschen abgetippte Originaljahre
-   2. MusicBrainz - Datum der ersten Veröffentlichung der Aufnahme
-   3. Wikipedia - Erscheinungsjahr aus dem Songartikel
-   4. Spotify - nur als letzter Ausweg, nennt oft Remaster-Jahre */
 function pruefeJahr(artist, title, spotifyJahr) {
-  var gemerkt = jahrCacheLies(artist, title);
-  if (gemerkt && gemerkt.jahr) return Promise.resolve(gemerkt);
+  return Promise.all([
+    jahrAusDatenbank(artist, title),
+    jahrAusWikipedia(artist, title),
+    findOriginalYear(artist, title).catch(function () { return null; })
+  ]).then(function (res) {
+    var db = res[0], wiki = res[1], spot = res[2];
+    var quellen = [];
+    if (db) quellen.push({ jahr: db, q: 'Kartendatenbank', gewicht: 3 });
+    if (wiki) quellen.push({ jahr: wiki, q: 'Wikipedia', gewicht: 2 });
+    if (spot) quellen.push({ jahr: spot, q: 'Spotify', gewicht: 1 });
+    if (!quellen.length) return null;
 
-  return jahrAusDatenbank(artist, title).then(function (db) {
-    if (db) return { jahr: db, quelle: 'Kartendatenbank' };
-
-    return jahrAusMusicBrainz(artist, title).then(function (mb) {
-      return jahrAusWikipedia(artist, title).then(function (wiki) {
-        /* MusicBrainz und Wikipedia gegeneinander prüfen: Liegt
-           Wikipedia früher, ist das meist die Erstveröffentlichung
-           (Single vor Album) - dann gewinnt der frühere Wert. */
-        if (mb && wiki) {
-          var jahr = Math.min(mb, wiki);
-          return { jahr: jahr, quelle: (jahr === mb ? 'MusicBrainz' : 'Wikipedia') };
-        }
-        if (mb) return { jahr: mb, quelle: 'MusicBrainz' };
-        if (wiki) return { jahr: wiki, quelle: 'Wikipedia' };
-
-        /* Kein weiterer Spotify-Aufruf: Die Suche dort lieferte ohnehin
-           meist Remaster-Jahre und kostete viele Anfragen. */
-        return null;
-      });
+    /* Kartendatenbank hat Vorrang - dort sind die Jahre geprüft */
+    var beste = quellen[0];
+    quellen.forEach(function (q) {
+      if (q.gewicht > beste.gewicht) beste = q;
+      else if (q.gewicht === beste.gewicht && q.jahr < beste.jahr) beste = q;
     });
-  }).then(function (r) {
-    if (!r || !r.jahr || r.jahr < 1900 || r.jahr > 2100) return null;
-    jahrCacheSchreib(artist, title, r);
-    return r;
-  }).catch(function () { return null; });
+    /* Deutlich frühere Angabe einer anderen Quelle übernehmen,
+       wenn Spotify offensichtlich ein Remaster nennt */
+    quellen.forEach(function (q) {
+      if (q.gewicht >= 2 && q.jahr < beste.jahr - 1) beste = q;
+    });
+    if (beste.jahr < 1900 || beste.jahr > 2100) return null;
+    return { jahr: beste.jahr, quelle: beste.q };
+  });
 }
 
 /* ---------- Jahresangaben ----------
@@ -2667,9 +2517,6 @@ function registerSW() {
 
 function boot() {
   registerSW();
-  /* Falls von einer früheren Fassung ein Bremswert gespeichert wurde:
-     entfernen, sonst bleibt die App dauerhaft langsam. */
-  try { localStorage.removeItem('rikster_apitempo'); } catch (e) { /* egal */ }
   applyAssists(localStorage.getItem(LS.assists) !== '0', false);
   applyControls(localStorage.getItem(LS.controls) === '1', false);
 
@@ -2723,14 +2570,6 @@ function runDiagnose() {
     return check('Profil (/me)', '/me')
       .then(function () { return check('Song-Abruf (Testsong)', '/tracks/3n3Ppam7vgaVa1iaRUc9Lp'); })
       .then(function () { return check('Suche', '/search?type=track&limit=5&q=test'); })
-      .then(function (ok) {
-        if (!hasPlaylistScope()) {
-          lines.push('\u26a0\ufe0f Playlist-Berechtigung fehlt \u2013 einmal abmelden und neu anmelden, sonst k\u00f6nnen nur 100 Titel je Playlist gelesen werden.');
-        } else {
-          lines.push('\u2705 Playlist-Berechtigung erteilt');
-        }
-        return ok;
-      })
       .then(function () {
         return api('/me/player/devices').then(function (res) {
           if (!res.ok) return readApiError(res).then(function (d) { lines.push('\u274c Ger\u00e4te: ' + d); });
