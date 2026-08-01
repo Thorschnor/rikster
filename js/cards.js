@@ -710,6 +710,9 @@ function ladeTracks(ids) {
 function jahreNachziehen() {
   var offen = deck.songs.filter(function (s) { return !s.geprueft; });
   if (!offen.length) { fsAus(); return Promise.resolve(); }
+  if (offen.length > 40) {
+    toast('Jahreszahlen werden geprüft \u2013 das dauert bei ' + offen.length + ' Songs einige Minuten');
+  }
   fsZeige('Jahreszahlen werden geprüft \u2026', 0, offen.length);
   function naechster(i) {
     if (i >= offen.length) {
@@ -719,9 +722,10 @@ function jahreNachziehen() {
     }
     var s = offen[i];
     return verfeinereJahr(s).catch(function () { /* egal */ }).then(function () {
-      s.geprueft = true; deckSave();
+      s.geprueft = true;
       fsZeige('Jahreszahlen werden geprüft \u2026', i + 1, offen.length);
-      return new Promise(function (r) { setTimeout(r, 120); }).then(function () { return naechster(i + 1); });
+      /* Keine zusätzliche Pause nötig - die Abfragen bremsen sich selbst */
+      return new Promise(function (r) { setTimeout(r, 20); }).then(function () { return naechster(i + 1); });
     });
   }
   return naechster(0);

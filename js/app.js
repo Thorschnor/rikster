@@ -920,33 +920,134 @@ function jahrAusWikipedia(artist, title) {
 }
 
 /* Alles zusammenführen */
-function pruefeJahr(artist, title, spotifyJahr) {
-  return Promise.all([
-    jahrAusDatenbank(artist, title),
-    jahrAusWikipedia(artist, title),
-    findOriginalYear(artist, title).catch(function () { return null; })
-  ]).then(function (res) {
-    var db = res[0], wiki = res[1], spot = res[2];
-    var quellen = [];
-    if (db) quellen.push({ jahr: db, q: 'Kartendatenbank', gewicht: 3 });
-    if (wiki) quellen.push({ jahr: wiki, q: 'Wikipedia', gewicht: 2 });
-    if (spot) quellen.push({ jahr: spot, q: 'Spotify', gewicht: 1 });
-    if (!quellen.length) return null;
+/* ---------- MusicBrainz: erste Veröffentlichung einer Aufnahme ----------
+   MusicBrainz führt zu jeder Aufnahme das Datum der ERSTEN
+   Veröffentlichung. Remaster, Neuauflagen und Compilations ändern
+   daran nichts - genau das brauchen wir fürs Spiel.
+   MusicBrainz bittet um höchstens eine Anfrage pro Sekunde,
+   deshalb laufen alle Abfragen durch eine Warteschlange. */
+var mbWarteschlange = Promise.resolve();
+var MB_ABSTAND = 1100;
 
-    /* Kartendatenbank hat Vorrang - dort sind die Jahre geprüft */
-    var beste = quellen[0];
-    quellen.forEach(function (q) {
-      if (q.gewicht > beste.gewicht) beste = q;
-      else if (q.gewicht === beste.gewicht && q.jahr < beste.jahr) beste = q;
+function mbAnfrage(url) {
+  var ergebnis = mbWarteschlange.then(function () {
+    return fetchWithTimeout(url, 12000).then(function (r) {
+      if (r.status === 503) {                       /* zu schnell - einmal nachfassen */
+        return new Promise(function (res) { setTimeout(res, 2500); })
+          .then(function () { return fetchWithTimeout(url, 12000); });
+      }
+      return r;
+    }).then(function (r) {
+      if (!r.ok) throw new Error('mb ' + r.status);
+      return r.json();
     });
-    /* Deutlich frühere Angabe einer anderen Quelle übernehmen,
-       wenn Spotify offensichtlich ein Remaster nennt */
-    quellen.forEach(function (q) {
-      if (q.gewicht >= 2 && q.jahr < beste.jahr - 1) beste = q;
-    });
-    if (beste.jahr < 1900 || beste.jahr > 2100) return null;
-    return { jahr: beste.jahr, quelle: beste.q };
   });
+  /* Nächste Anfrage erst nach der Wartezeit starten */
+  mbWarteschlange = ergebnis.catch(function () { /* egal */ }).then(function () {
+    return new Promise(function (res) { setTimeout(res, MB_ABSTAND); });
+  });
+  return ergebnis;
+}
+
+function jahrAusMusicBrainz(artist, title) {
+  var t = cleanTitle(title);
+  var a = mainArtist(artist);
+  if (!t || !a) return Promise.resolve(null);
+
+  var q = 'recording:"' + t.replace(/"/g, '') + '" AND artist:"' + a.replace(/"/g, '') + '"';
+  var url = 'https://musicbrainz.org/ws/2/recording/?fmt=json&limit=25&query=' + encodeURIComponent(q);
+
+  return mbAnfrage(url).then(function (j) {
+    var treffer = (j && j.recordings) || [];
+    var nt = normalize(t), na = normalize(a);
+    var jahre = [];
+
+    treffer.forEach(function (rec) {
+      if (rec.score && rec.score < 85) return;
+      /* Titel muss übereinstimmen - sonst erwischen wir ein anderes Stück */
+      var rt = normalize(cleanTitle(rec.title));
+      if (rt !== nt && rt.indexOf(nt) === -1 && nt.indexOf(rt) === -1) return;
+      /* Interpret muss übereinstimmen */
+      var passt = (rec['artist-credit'] || []).some(function (ac) {
+        var n = normalize(ac.artist && ac.artist.name);
+        return n === na || n.indexOf(na) !== -1 || na.indexOf(n) !== -1;
+      });
+      if (!passt) return;
+
+      function merke(datum) {
+        var y = parseInt(String(datum || '').slice(0, 4), 10);
+        if (isFinite(y) && y >= 1900 && y <= 2100) jahre.push(y);
+      }
+      merke(rec['first-release-date']);
+      (rec.releases || []).forEach(function (rel) {
+        merke(rel.date);
+        if (rel['release-group']) merke(rel['release-group']['first-release-date']);
+      });
+    });
+
+    if (!jahre.length) return null;
+    jahre.sort(function (x, y) { return x - y; });
+    return jahre[0];
+  }).catch(function () { return null; });
+}
+
+/* ---------- Gemerkte Ergebnisse ---------- */
+function jahrCacheKey(artist, title) {
+  return normalize(mainArtist(artist)) + '|' + normalize(cleanTitle(title));
+}
+function jahrCacheLies(artist, title) {
+  try {
+    var c = JSON.parse(localStorage.getItem('rikster_jahre') || '{}');
+    return c[jahrCacheKey(artist, title)] || null;
+  } catch (e) { return null; }
+}
+function jahrCacheSchreib(artist, title, wert) {
+  try {
+    var c = JSON.parse(localStorage.getItem('rikster_jahre') || '{}');
+    var schluessel = Object.keys(c);
+    if (schluessel.length > 3000) delete c[schluessel[0]];     /* nicht endlos wachsen lassen */
+    c[jahrCacheKey(artist, title)] = wert;
+    localStorage.setItem('rikster_jahre', JSON.stringify(c));
+  } catch (e) { /* egal */ }
+}
+
+/* ---------- Alle Quellen zusammenführen ----------
+   Reihenfolge nach Verlässlichkeit:
+   1. Hitster-Kartendatenbank - von Menschen abgetippte Originaljahre
+   2. MusicBrainz - Datum der ersten Veröffentlichung der Aufnahme
+   3. Wikipedia - Erscheinungsjahr aus dem Songartikel
+   4. Spotify - nur als letzter Ausweg, nennt oft Remaster-Jahre */
+function pruefeJahr(artist, title, spotifyJahr) {
+  var gemerkt = jahrCacheLies(artist, title);
+  if (gemerkt && gemerkt.jahr) return Promise.resolve(gemerkt);
+
+  return jahrAusDatenbank(artist, title).then(function (db) {
+    if (db) return { jahr: db, quelle: 'Kartendatenbank' };
+
+    return jahrAusMusicBrainz(artist, title).then(function (mb) {
+      return jahrAusWikipedia(artist, title).then(function (wiki) {
+        /* MusicBrainz und Wikipedia gegeneinander prüfen: Liegt
+           Wikipedia früher, ist das meist die Erstveröffentlichung
+           (Single vor Album) - dann gewinnt der frühere Wert. */
+        if (mb && wiki) {
+          var jahr = Math.min(mb, wiki);
+          return { jahr: jahr, quelle: (jahr === mb ? 'MusicBrainz' : 'Wikipedia') };
+        }
+        if (mb) return { jahr: mb, quelle: 'MusicBrainz' };
+        if (wiki) return { jahr: wiki, quelle: 'Wikipedia' };
+
+        return findOriginalYear(artist, title).catch(function () { return null; })
+          .then(function (spot) {
+            if (spot) return { jahr: spot, quelle: 'Spotify' };
+            return null;
+          });
+      });
+    });
+  }).then(function (r) {
+    if (!r || !r.jahr || r.jahr < 1900 || r.jahr > 2100) return null;
+    jahrCacheSchreib(artist, title, r);
+    return r;
+  }).catch(function () { return null; });
 }
 
 /* ---------- Jahresangaben ----------
