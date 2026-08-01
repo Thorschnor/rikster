@@ -665,30 +665,48 @@ function ladeTracks(ids) {
   var fehler = null;
   fsZeige('Songs werden geladen \u2026', 0, ids.length);
 
-  /* Songs EINZELN abrufen. Der Sammelabruf /tracks?ids=... wird von
-     Spotify bei manchen Konten mit 403 abgelehnt, der Einzelabruf
-     /tracks/{id} funktioniert dagegen zuverlässig. */
-  function naechster(i) {
+  /* Zuerst gebündelt abfragen: 50 Songs mit EINER Anfrage. Das schont
+     das Anfragekontingent enorm. Lehnt Spotify das ab, holen wir die
+     Songs einzeln - langsamer, aber zuverlässig. */
+  function buendel(i) {
+    if (i >= ids.length) return Promise.resolve(true);
+    var teil = ids.slice(i, i + 50);
+    return api('/tracks?ids=' + teil.join(',')).then(function (res) {
+      if (!res.ok) {
+        return readApiError(res).then(function (d) { fehler = d; return false; });
+      }
+      return res.json().then(function (j) {
+        (j.tracks || []).forEach(function (t) { if (t && t.id) alle.push(t); });
+        fsZeige('Songs werden geladen \u2026', Math.min(i + 50, ids.length), ids.length);
+        return buendel(i + 50);
+      });
+    }).catch(function () { return false; });
+  }
+
+  function einzeln(i) {
     if (i >= ids.length) return Promise.resolve();
     return api('/tracks/' + ids[i]).then(function (res) {
       if (!res.ok) {
-        if (!fehler) {
-          return readApiError(res).then(function (d) { fehler = d; return null; });
-        }
+        if (!fehler) return readApiError(res).then(function (d) { fehler = d; return null; });
         return null;
       }
       return res.json();
     }).then(function (t) {
       if (t && t.id) alle.push(t);
       fsZeige('Songs werden geladen \u2026', i + 1, ids.length);
-      return new Promise(function (r) { setTimeout(r, 60); }).then(function () { return naechster(i + 1); });
+      return einzeln(i + 1);
     }).catch(function () {
-      fsZeige('Songs werden geladen \u2026', i + 1, ids.length);
-      return naechster(i + 1);
+      return einzeln(i + 1);
     });
   }
 
-  return naechster(0).then(function () {
+  return buendel(0).then(function (geklappt) {
+    if (geklappt && alle.length) return null;
+    /* Bündel-Weg hat nicht funktioniert - einzeln nachholen */
+    alle = [];
+    fehler = null;
+    return einzeln(0);
+  }).then(function () {
     if (!alle.length) {
       fsAus();
       openModal({

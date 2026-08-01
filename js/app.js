@@ -354,7 +354,27 @@ function logout() {
    Wiedergabe-Befehle (opts.sofort) umgehen die Warteschlange, damit
    Abspielen und Pausieren ohne Verzögerung reagieren. */
 var apiKette = Promise.resolve();
-var API_ABSTAND = 130;
+/* Spotify rechnet über ein rollendes 30-Sekunden-Fenster. Für Apps im
+   Entwicklungsmodus ist die Grenze niedrig, deshalb starten wir bewusst
+   ruhig. Bremst Spotify trotzdem, erhöht die App den Abstand dauerhaft
+   und merkt sich das auch über einen Neustart hinweg. */
+var API_ABSTAND = 340;
+(function () {
+  try {
+    var g = parseInt(localStorage.getItem('rikster_apitempo'), 10);
+    if (isFinite(g) && g > API_ABSTAND && g <= 2000) API_ABSTAND = g;
+  } catch (e) { /* egal */ }
+})();
+
+var bremsGemeldet = false;
+function apiLangsamer() {
+  API_ABSTAND = Math.min(2000, Math.round(API_ABSTAND * 1.6));
+  try { localStorage.setItem('rikster_apitempo', String(API_ABSTAND)); } catch (e) { /* egal */ }
+  if (!bremsGemeldet && typeof toast === 'function') {
+    bremsGemeldet = true;
+    toast('Spotify bremst \u2013 die App macht automatisch langsamer weiter');
+  }
+}
 
 function apiRoh(path, opts) {
   function doFetch(token) {
@@ -369,18 +389,16 @@ function apiRoh(path, opts) {
           return doFetch(localStorage.getItem(LS.access));
         });
       }
-      if (res.status === 429 && versuch < 4) {
+      if (res.status === 429 && versuch < 6) {
         var warte = 2;
         try {
           var kopf = res.headers && res.headers.get && res.headers.get('Retry-After');
           var n = parseInt(kopf, 10);
           if (isFinite(n) && n > 0) warte = n;
         } catch (e) { /* egal */ }
-        if (warte > 30) warte = 30;
+        if (warte > 60) warte = 60;
         console.warn('Spotify bremst (429) \u2013 warte ' + warte + ' s');
-        /* Auch die Warteschlange anhalten, sonst laufen die nächsten
-           Anfragen sofort in dieselbe Sperre */
-        API_ABSTAND = Math.min(600, API_ABSTAND + 80);
+        apiLangsamer();
         return new Promise(function (r) { setTimeout(r, warte * 1000); })
           .then(function () { return mitWiederholung(token, versuch + 1); });
       }
@@ -907,6 +925,24 @@ function jahrAusDatenbank(artist, title) {
   }).catch(function () { return null; });
 }
 
+/* Auch Wikipedia mag keine Anfrageflut - eigene Warteschlange */
+var wikiKette = Promise.resolve();
+function wikiAnfrage(url) {
+  var ergebnis = wikiKette.then(function () {
+    return fetchWithTimeout(url, 9000).then(function (r) {
+      if (r.status === 429) {
+        return new Promise(function (res) { setTimeout(res, 3000); })
+          .then(function () { return fetchWithTimeout(url, 9000); });
+      }
+      return r;
+    });
+  });
+  wikiKette = ergebnis.catch(function () { /* egal */ }).then(function () {
+    return new Promise(function (r) { setTimeout(r, 220); });
+  });
+  return ergebnis;
+}
+
 /* 2) Wikipedia: Erscheinungsjahr aus dem Songartikel */
 function jahrAusWikipedia(artist, title) {
   var t = cleanTitle(title);
@@ -916,7 +952,7 @@ function jahrAusWikipedia(artist, title) {
     var q = '"' + t.replace(/"/g, '') + '" ' + a + (lang === 'de' ? ' Lied' : ' song');
     var url = 'https://' + lang + '.wikipedia.org/w/api.php?action=query&list=search&format=json&formatversion=2&origin=*&srlimit=4&srsearch=' +
       encodeURIComponent(q);
-    return fetchWithTimeout(url, 9000).then(function (r) {
+    return wikiAnfrage(url).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (j) {
       var hits = (j && j.query && j.query.search) || [];
@@ -933,7 +969,7 @@ function jahrAusWikipedia(artist, title) {
     if (!treffer) return null;
     var url = 'https://' + treffer.lang + '.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exintro=1&redirects=1&format=json&formatversion=2&origin=*&titles=' +
       encodeURIComponent(treffer.titel);
-    return fetchWithTimeout(url, 9000).then(function (r) {
+    return wikiAnfrage(url).then(function (r) {
       return r.ok ? r.json() : null;
     }).then(function (j) {
       var p = j && j.query && j.query.pages && j.query.pages[0];
