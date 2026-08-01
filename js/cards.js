@@ -806,9 +806,11 @@ function ladePlaylist(pid) {
           }
           if (!ids.length) throw new Error('nichts gefunden');
           /* Gesamtzahl aus den Seitenangaben ziehen */
-          var tm = html.match(/music:song_count"\s+content="(\d+)"/) ||
+          var tm = html.match(/music:song_count"[^>]*content="(\d+)"/) ||
+                   html.match(/content="(\d+)"[^>]*music:song_count/) ||
                    html.match(/"trackCount"\s*:\s*(\d+)/) ||
-                   html.match(/"totalCount"\s*:\s*(\d+)/);
+                   html.match(/"totalCount"\s*:\s*(\d+)/) ||
+                   html.match(/"total"\s*:\s*(\d+)/);
           if (tm) gesamtZahl = parseInt(tm[1], 10);
           return ids;
         });
@@ -817,12 +819,55 @@ function ladePlaylist(pid) {
     return kette;
   }
 
+  function fehltBerechtigung() {
+    return (typeof hasPlaylistScope === 'function') && !hasPlaylistScope();
+  }
+
+  function zeigePlaylistFehler() {
+    if (fehltBerechtigung()) {
+      openModal({
+        title: 'Berechtigung fehlt',
+        text: 'Rikster darf deine Playlists gerade nicht lesen \u2013 dafür fehlt eine Spotify-Berechtigung, ' +
+          'die es bei deiner Anmeldung noch nicht gab.\n\nMelde dich einmal neu an, danach werden alle Titel geladen.' +
+          (letzterFehler ? '\n\nTechnik: ' + letzterFehler : ''),
+        primary: 'Jetzt neu anmelden',
+        onPrimary: function () { if (typeof reauthorize === 'function') reauthorize(); },
+        secondary: 'Später'
+      });
+      return;
+    }
+    openModal({
+      title: 'Playlist nicht lesbar',
+      text: 'Spotify hat den Zugriff auf die Playlist abgelehnt.' +
+        (letzterFehler ? '\n\nTechnik: ' + letzterFehler : '') +
+        '\n\nAusweg: Öffne die Playlist in der Spotify-App, markiere alle Titel (langes Tippen, dann „Alle auswählen"), ' +
+        'kopiere sie und füge sie hier ein. Einzelne Song-Links funktionieren immer.',
+      primary: 'OK'
+    });
+  }
+
   function warnungWennUnvollstaendig(anzahl) {
-    if (!gesamtZahl || gesamtZahl <= anzahl) return;
+    var mehrDa = gesamtZahl ? (gesamtZahl > anzahl) : (anzahl === 100);   /* 100 = Grenze der öffentlichen Seite */
+    if (!mehrDa) return;
+    if (fehltBerechtigung()) {
+      openModal({
+        title: 'Nur ' + anzahl + ' Titel geladen',
+        text: 'Es konnten nur ' + anzahl + ' Titel gelesen werden' +
+          (gesamtZahl ? ' \u2013 die Playlist hat ' + gesamtZahl + '.' : '.') +
+          '\n\nGrund: Rikster fehlt die Spotify-Berechtigung zum Lesen von Playlists. ' +
+          'Melde dich einmal neu an, dann werden alle Titel geladen.',
+        primary: 'Jetzt neu anmelden',
+        onPrimary: function () { if (typeof reauthorize === 'function') reauthorize(); },
+        secondary: 'Später'
+      });
+      return;
+    }
     openModal({
       title: 'Nur die ersten ' + anzahl + ' Titel',
-      text: 'Die Playlist hat ' + gesamtZahl + ' Titel, Spotify hat aber nur ' + anzahl + ' herausgegeben. ' +
-        (gesamtZahl - anzahl) + ' Titel fehlen also.\n\nSo bekommst du alle: Öffne die Playlist in der Spotify-App, ' +
+      text: (gesamtZahl ? 'Die Playlist hat ' + gesamtZahl + ' Titel, Spotify hat aber nur ' + anzahl + ' herausgegeben. ' +
+        (gesamtZahl - anzahl) + ' Titel fehlen also.' :
+        'Spotify hat nur die ersten ' + anzahl + ' Titel herausgegeben \u2013 hat die Playlist mehr, fehlen sie.') +
+        '\n\nSo bekommst du alle: Öffne die Playlist in der Spotify-App, ' +
         'markiere alle Titel (langes Tippen, dann „Alle auswählen"), kopiere sie und füge sie hier ein. ' +
         'Dieser Weg hat keine Begrenzung.',
       primary: 'Verstanden'
@@ -846,13 +891,7 @@ function ladePlaylist(pid) {
         return ladeTracks(ids).then(function () { warnungWennUnvollstaendig(ids.length); });
       }).catch(function () {
         fsAus();
-        openModal({
-          title: 'Playlist nicht lesbar',
-          text: 'Spotify hat den Zugriff auf die Playlist abgelehnt.' +
-            (letzterFehler ? '\n\nTechnik: ' + letzterFehler : '') +
-            '\n\nAusweg: Öffne die Playlist in der Spotify-App, markiere alle Titel (langes Tippen, dann „Alle auswählen"), kopiere sie und füge sie hier ein. Einzelne Song-Links funktionieren immer.',
-          primary: 'OK'
-        });
+        zeigePlaylistFehler();
       });
     });
 }

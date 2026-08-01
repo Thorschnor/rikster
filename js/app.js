@@ -25,7 +25,7 @@
 var CFG = window.RIKSTER_CONFIG || {};
 var CLIENT_ID = String(CFG.SPOTIFY_CLIENT_ID || '').trim();
 var REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
-var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
+var SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative';
 var API_BASE = 'https://api.spotify.com/v1';
 var HITSTER_DB = 'https://raw.githubusercontent.com/andygruber/songseeker-hitster-playlists/main/';
 var CORS_PROXIES = [
@@ -254,6 +254,7 @@ function login() {
 }
 
 function saveTokens(data) {
+  if (data.scope) { try { localStorage.setItem('rikster_scopes', data.scope); } catch (e) { /* egal */ } }
   if (data.access_token) localStorage.setItem(LS.access, data.access_token);
   if (data.refresh_token) localStorage.setItem(LS.refresh, data.refresh_token);
   var ttl = (data.expires_in || 3600) - 60;
@@ -309,6 +310,23 @@ function ensureToken() {
     });
   }
   return Promise.reject(new Error('not-logged-in'));
+}
+
+/* Ein aufgefrischtes Token behält die alten Berechtigungen. Für neue
+   Rechte - etwa zum Lesen von Playlists - ist eine komplett neue
+   Anmeldung nötig. */
+function hasPlaylistScope() {
+  var s = '';
+  try { s = localStorage.getItem('rikster_scopes') || ''; } catch (e) { /* egal */ }
+  return s.indexOf('playlist-read-private') !== -1;
+}
+
+function reauthorize() {
+  localStorage.removeItem(LS.access);
+  localStorage.removeItem(LS.refresh);
+  localStorage.removeItem(LS.expires);
+  try { localStorage.removeItem('rikster_scopes'); } catch (e) { /* egal */ }
+  login();
 }
 
 function isLoggedIn() {
@@ -2570,6 +2588,14 @@ function runDiagnose() {
     return check('Profil (/me)', '/me')
       .then(function () { return check('Song-Abruf (Testsong)', '/tracks/3n3Ppam7vgaVa1iaRUc9Lp'); })
       .then(function () { return check('Suche', '/search?type=track&limit=5&q=test'); })
+      .then(function (ok) {
+        if (!hasPlaylistScope()) {
+          lines.push('\u26a0\ufe0f Playlist-Berechtigung fehlt \u2013 einmal abmelden und neu anmelden, sonst k\u00f6nnen nur 100 Titel je Playlist gelesen werden.');
+        } else {
+          lines.push('\u2705 Playlist-Berechtigung erteilt');
+        }
+        return ok;
+      })
       .then(function () {
         return api('/me/player/devices').then(function (res) {
           if (!res.ok) return readApiError(res).then(function (d) { lines.push('\u274c Ger\u00e4te: ' + d); });
