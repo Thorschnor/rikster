@@ -1224,9 +1224,8 @@ function baueDokument(jsPDF) {
 
     if (!erste) doc.addPage();
     erste = false;
-    var bg = rgbStr(deck.design.qrBg);
-    doc.setFillColor(bg[0], bg[1], bg[2]);
-    doc.rect(0, 0, 210, 297, 'F');
+    /* Kein flächiger Seitenhintergrund - nur die Karten werden gefüllt.
+       Das spart beim Ausdrucken erheblich Tinte. */
     teil.forEach(function (song, idx) {
       var sp = idx % SEITE.spalten, ze = Math.floor(idx / SEITE.spalten);
       karteVornPdf(doc, song, SEITE.randX + sp * SEITE.karte, SEITE.randY + ze * SEITE.karte, SEITE.karte);
@@ -1234,8 +1233,6 @@ function baueDokument(jsPDF) {
     if (deck.design.borders) schnittlinien(doc, teil.length);
 
     doc.addPage();
-    doc.setFillColor(255, 255, 255);
-    doc.rect(0, 0, 210, 297, 'F');
     teil.forEach(function (song, idx) {
       var sp = (SEITE.spalten - 1) - (idx % SEITE.spalten), ze = Math.floor(idx / SEITE.spalten);
       karteHintenPdf(doc, song, SEITE.randX + sp * SEITE.karte, SEITE.randY + ze * SEITE.karte, SEITE.karte, jahre);
@@ -1250,13 +1247,20 @@ function schnittlinien(doc, anzahl) {
   doc.setDrawColor(150, 150, 150);
   doc.setLineWidth(0.1);
   var zeilen = Math.ceil(anzahl / SEITE.spalten);
+  var letzteZeile = anzahl - (zeilen - 1) * SEITE.spalten;   /* Karten in der letzten Zeile */
+
+  /* Senkrechte Linien: in der letzten Zeile nur so weit, wie Karten liegen */
   for (var c = 0; c <= SEITE.spalten; c++) {
     var x = SEITE.randX + c * SEITE.karte;
-    doc.line(x, SEITE.randY, x, SEITE.randY + zeilen * SEITE.karte);
+    var bis = (c <= letzteZeile) ? zeilen : (zeilen - 1);
+    if (bis <= 0) continue;
+    doc.line(x, SEITE.randY, x, SEITE.randY + bis * SEITE.karte);
   }
+  /* Waagerechte Linien */
   for (var r = 0; r <= zeilen; r++) {
     var y = SEITE.randY + r * SEITE.karte;
-    doc.line(SEITE.randX, y, SEITE.randX + SEITE.spalten * SEITE.karte, y);
+    var spalten = (r >= zeilen) ? letzteZeile : SEITE.spalten;
+    doc.line(SEITE.randX, y, SEITE.randX + spalten * SEITE.karte, y);
   }
 }
 
