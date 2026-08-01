@@ -668,12 +668,15 @@ body.party-guess .player-actions { grid-template-columns: 1fr; }
   body > *:not(#printRoot) { display: none !important; }
   #printRoot { display: block !important; }
   .sheet-page {
-    position: relative; width: 210mm; height: 297mm;
+    position: relative !important; width: 210mm !important; height: 297mm !important;
     page-break-after: always; break-after: page; overflow: hidden;
+    box-sizing: border-box; margin: 0; padding: 0;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .sheet-page:last-child { page-break-after: auto; break-after: auto; }
-  .pcard {
-    position: absolute; width: 50mm; height: 50mm; overflow: hidden;
+  #printRoot .pcard {
+    position: absolute !important; width: 50mm !important; height: 50mm !important;
+    overflow: hidden; box-sizing: border-box;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .pcard.cut { outline: 0.2mm dashed rgba(0,0,0,.35); outline-offset: -0.1mm; }

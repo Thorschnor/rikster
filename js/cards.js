@@ -292,7 +292,9 @@ function kartenVorderseite(song, px) {
   var d = deck.design;
   var el = document.createElement('div');
   el.className = 'pcard pcard-front';
-  el.style.position = 'relative';
+  /* Im Druckbogen MUSS die Karte absolut liegen - sonst fließen alle
+     Karten hintereinander statt ins Raster. */
+  el.style.position = px ? 'relative' : 'absolute';
   el.style.background = d.qrBg;
   if (px) { el.style.width = px + 'px'; el.style.height = px + 'px'; }
   if (deckImage) {
@@ -353,7 +355,7 @@ function kartenRueckseite(song, jahre, px) {
   var d = deck.design;
   var el = document.createElement('div');
   el.className = 'pcard pcard-back';
-  el.style.position = 'relative';
+  el.style.position = px ? 'relative' : 'absolute';
   el.style.background = jahresFarbe(song.year, jahre.length ? jahre : [song.year || 2000]);
   if (px) {
     el.style.cssText += ';width:' + px + 'px;height:' + px + 'px;display:flex;flex-direction:column;' +
@@ -777,8 +779,33 @@ function platziere(el, spalte, zeile) {
   if (deck.design.borders) el.classList.add('cut');
 }
 
+var DRUCK_HINWEIS = 'rikster_druckhinweis';
+
 function baueDruck() {
   if (!deck.songs.length) { toast('Noch keine Karten in der Liste'); return; }
+  var gesehen = false;
+  try { gesehen = localStorage.getItem(DRUCK_HINWEIS) === '1'; } catch (e) { /* egal */ }
+  if (!gesehen) {
+    openModal({
+      title: 'Kurz vor dem Drucken',
+      text: 'Stell im Druckdialog bitte ein:\n\n' +
+        '\u2022 Ränder: keine\n' +
+        '\u2022 Skalierung: 100 % (nicht "an Seite anpassen")\n' +
+        '\u2022 Hintergrundgrafiken drucken: an\n\n' +
+        'Sonst verrutschen die Karten oder bleiben weiß. Zum Speichern als PDF wählst du dort "Als PDF speichern".',
+      primary: 'Weiter',
+      onPrimary: function () {
+        try { localStorage.setItem(DRUCK_HINWEIS, '1'); } catch (e) { /* egal */ }
+        pruefeJahre();
+      },
+      secondary: 'Abbrechen'
+    });
+    return;
+  }
+  pruefeJahre();
+}
+
+function pruefeJahre() {
   var fehlend = deck.songs.filter(function (s) { return !s.year; });
   if (fehlend.length) {
     openModal({
@@ -802,7 +829,8 @@ function druckStarten() {
 
     var vorn = document.createElement('div');
     vorn.className = 'sheet-page';
-    vorn.style.background = deck.design.qrBg;
+    vorn.style.cssText = 'position:relative;width:210mm;height:297mm;overflow:hidden;' +
+      'page-break-after:always;break-after:page;background:' + deck.design.qrBg + ';';
     teil.forEach(function (s, idx) {
       var k = kartenVorderseite(s);
       platziere(k, idx % SEITE.spalten, Math.floor(idx / SEITE.spalten));
@@ -812,7 +840,8 @@ function druckStarten() {
 
     var hinten = document.createElement('div');
     hinten.className = 'sheet-page';
-    hinten.style.background = '#FFFFFF';
+    hinten.style.cssText = 'position:relative;width:210mm;height:297mm;overflow:hidden;' +
+      'page-break-after:always;break-after:page;background:#FFFFFF;';
     teil.forEach(function (s, idx) {
       var k = kartenRueckseite(s, jahre);
       /* Spalten spiegeln, damit die Lösung hinter der richtigen Karte landet */
@@ -820,6 +849,13 @@ function druckStarten() {
       hinten.appendChild(k);
     });
     root.appendChild(hinten);
+  }
+
+  var seiten = root.querySelectorAll('.sheet-page');
+  if (seiten.length) {
+    var letzte = seiten[seiten.length - 1];
+    letzte.style.pageBreakAfter = 'auto';
+    letzte.style.breakAfter = 'auto';
   }
 
   root.hidden = false;
