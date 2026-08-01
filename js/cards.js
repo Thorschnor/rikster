@@ -507,12 +507,17 @@ function renderDeck() {
     row.appendChild(main); row.appendChild(jahr); row.appendChild(del);
     liste.appendChild(row);
   });
-  renderDesignPreview();
+  /* Vorschau nur zeichnen, wenn das Design-Blatt sichtbar ist */
+  var ds = $('#designSheet');
+  if (ds && ds.classList.contains('open')) renderDesignPreview();
 }
 
-function addSong(t, jahrPruefen) {
+function addSong(t, jahrPruefen, stumm) {
   if (!t || !t.id) return Promise.resolve(false);
-  if (deck.songs.some(function (s) { return s.id === t.id; })) { toast('Der Song ist schon in der Liste'); return Promise.resolve(false); }
+  if (deck.songs.some(function (s) { return s.id === t.id; })) {
+    if (!stumm) toast('Der Song ist schon in der Liste');
+    return Promise.resolve(false);
+  }
   var eintrag = {
     id: t.id,
     artist: (t.artists || []).map(function (a) { return a.name; }).join(', '),
@@ -521,9 +526,22 @@ function addSong(t, jahrPruefen) {
     link: 'https://open.spotify.com/track/' + t.id
   };
   deck.songs.push(eintrag);
-  deckSave(); renderDeck();
+  /* Bei Massen-Import erst am Ende einmal speichern und zeichnen -
+     sonst wird die Liste hunderte Male neu aufgebaut. */
+  if (!stumm) { deckSave(); renderDeck(); }
   if (jahrPruefen === false) return Promise.resolve(true);
   return verfeinereJahr(eintrag).then(function () { return true; });
+}
+
+/* Sammelt Änderungen und zeichnet die Liste höchstens alle 400 ms neu */
+var zeichenTimer = null;
+function spaeterZeichnen() {
+  if (zeichenTimer) return;
+  zeichenTimer = setTimeout(function () {
+    zeichenTimer = null;
+    deckSave();
+    renderDeck();
+  }, 400);
 }
 
 function verfeinereJahr(eintrag) {
@@ -532,8 +550,7 @@ function verfeinereJahr(eintrag) {
     if (r && r.jahr && r.jahr !== eintrag.year) {
       eintrag.year = r.jahr;
       eintrag.quelle = r.quelle;
-      deckSave();
-      renderDeck();
+      spaeterZeichnen();
     } else if (r) {
       eintrag.quelle = r.quelle;
     }
@@ -617,7 +634,8 @@ function ausgewaehlteHinzufuegen() {
   if (!auswahl.length) return;
   stopPlayback();                 /* angespielten Song beenden */
   var liste = auswahl.slice();
-  liste.forEach(function (t) { addSong(t, false); });
+  liste.forEach(function (t) { addSong(t, false, true); });
+  deckSave(); renderDeck();
   suchListeSchliessen();
   $('#cardSearch').value = '';
   jahreNachziehen();
@@ -681,7 +699,8 @@ function ladeTracks(ids) {
       });
       return;
     }
-    alle.forEach(function (t) { addSong(t, false); });
+    alle.forEach(function (t) { addSong(t, false, true); });
+    deckSave(); renderDeck();
     var fehlend = ids.length - alle.length;
     if (fehlend) toast(fehlend + (fehlend === 1 ? ' Song war nicht abrufbar' : ' Songs waren nicht abrufbar'));
     return jahreNachziehen();
@@ -711,9 +730,12 @@ function jahreNachziehen() {
 function ladePlaylist(pid) {
   fsZeige('Playlist wird gelesen \u2026', 0, 0);
   var letzterFehler = null;
+  var gesamtZahl = null;      /* wie viele Titel die Playlist wirklich hat */
 
   function ueberApi(art) {
     var alle = [];
+    var geholt = 0;           /* Zahl der gelesenen Einträge, auch nicht abspielbare */
+
     function seite(off) {
       return api('/playlists/' + pid + '/' + art + '?limit=50&offset=' + off).then(function (res) {
         if (!res.ok) {
@@ -722,12 +744,19 @@ function ladePlaylist(pid) {
         return res.json();
       }).then(function (j) {
         var items = (j && j.items) || [];
+        if (j && typeof j.total === 'number') gesamtZahl = j.total;
+        geholt += items.length;
         items.forEach(function (it) {
           var t = it && (it.track || it.item);
           if (t && t.id) alle.push(t);
         });
-        fsZeige('Playlist wird gelesen \u2026', alle.length, 0);
-        if (items.length === 50 && alle.length < 1000) return seite(off + 50);
+        fsZeige('Playlist wird gelesen \u2026', alle.length, gesamtZahl || 0);
+
+        /* Weiterblättern, solange die Playlist noch Einträge hergibt.
+           Maßgeblich ist die Gesamtzahl bzw. ob überhaupt etwas kam -
+           nicht, ob die Seite exakt voll war. */
+        var nochWas = (gesamtZahl !== null) ? (off + items.length < gesamtZahl) : (items.length > 0);
+        if (nochWas && items.length > 0 && geholt < 10000) return seite(off + items.length);
         if (!alle.length) throw new Error('leer');
         return alle;
       });
@@ -735,32 +764,86 @@ function ladePlaylist(pid) {
     return seite(0);
   }
 
-  /* Notweg ohne Playlist-Schnittstelle: Titelreihenfolge aus der
-     öffentlichen Embed-Seite lesen und die Songs einzeln abrufen. */
+  /* Dritter Weg: das Playlist-Objekt selbst abfragen. Manche Konten
+     dürfen das, obwohl die Unterendpunkte gesperrt sind. */
+  function ueberObjekt() {
+    return api('/playlists/' + pid).then(function (res) {
+      if (!res.ok) {
+        return readApiError(res).then(function (d) { letzterFehler = d + ' [playlist]'; throw new Error(d); });
+      }
+      return res.json();
+    }).then(function (j) {
+      var tr = j && j.tracks;
+      var items = (tr && tr.items) || [];
+      if (tr && typeof tr.total === 'number') gesamtZahl = tr.total;
+      var alle = [];
+      items.forEach(function (it) {
+        var t = it && (it.track || it.item);
+        if (t && t.id) alle.push(t);
+      });
+      if (!alle.length) throw new Error('leer');
+      return alle;
+    });
+  }
+
+  /* Notweg ohne Playlist-Schnittstelle: Titel aus der öffentlichen
+     Seite lesen. Achtung: Spotify liefert dort nur die ersten 100. */
   function ueberEmbed() {
     if (typeof proxyFetch !== 'function') return Promise.reject(new Error('kein Proxy'));
-    return proxyFetch('https://open.spotify.com/embed/playlist/' + pid).then(function (html) {
-      var ids = [], re = /spotify:track:([A-Za-z0-9]{22})/g, m;
-      while ((m = re.exec(html)) !== null) if (ids.indexOf(m[1]) === -1) ids.push(m[1]);
-      if (!ids.length) throw new Error('nichts gefunden');
-      return ids;
+    var adressen = [
+      'https://open.spotify.com/embed/playlist/' + pid,
+      'https://open.spotify.com/playlist/' + pid
+    ];
+    var kette = Promise.reject(new Error('start'));
+    adressen.forEach(function (adr) {
+      kette = kette.catch(function () {
+        return proxyFetch(adr).then(function (html) {
+          var ids = [], re = /spotify:track:([A-Za-z0-9]{22})/g, m;
+          while ((m = re.exec(html)) !== null) if (ids.indexOf(m[1]) === -1) ids.push(m[1]);
+          if (!ids.length) {
+            var re2 = /open\.spotify\.com\/track\/([A-Za-z0-9]{22})/g;
+            while ((m = re2.exec(html)) !== null) if (ids.indexOf(m[1]) === -1) ids.push(m[1]);
+          }
+          if (!ids.length) throw new Error('nichts gefunden');
+          /* Gesamtzahl aus den Seitenangaben ziehen */
+          var tm = html.match(/music:song_count"\s+content="(\d+)"/) ||
+                   html.match(/"trackCount"\s*:\s*(\d+)/) ||
+                   html.match(/"totalCount"\s*:\s*(\d+)/);
+          if (tm) gesamtZahl = parseInt(tm[1], 10);
+          return ids;
+        });
+      });
+    });
+    return kette;
+  }
+
+  function warnungWennUnvollstaendig(anzahl) {
+    if (!gesamtZahl || gesamtZahl <= anzahl) return;
+    openModal({
+      title: 'Nur die ersten ' + anzahl + ' Titel',
+      text: 'Die Playlist hat ' + gesamtZahl + ' Titel, Spotify hat aber nur ' + anzahl + ' herausgegeben. ' +
+        (gesamtZahl - anzahl) + ' Titel fehlen also.\n\nSo bekommst du alle: Öffne die Playlist in der Spotify-App, ' +
+        'markiere alle Titel (langes Tippen, dann „Alle auswählen"), kopiere sie und füge sie hier ein. ' +
+        'Dieser Weg hat keine Begrenzung.',
+      primary: 'Verstanden'
     });
   }
 
   ueberApi('items')
     .catch(function () { return ueberApi('tracks'); })
+    .catch(function () { return ueberObjekt(); })
     .then(function (liste) {
-      liste.forEach(function (t) { addSong(t, false); });
+      liste.forEach(function (t) { addSong(t, false, true); });
+      deckSave(); renderDeck();
       $('#cardLinks').value = '';
       toast(liste.length + ' Songs übernommen');
-      return jahreNachziehen();
+      return jahreNachziehen().then(function () { warnungWennUnvollstaendig(liste.length); });
     })
     .catch(function () {
-      /* Beide Wege über die Schnittstelle gescheitert -> Embed versuchen */
+      /* Beide Wege über die Schnittstelle gescheitert -> öffentliche Seite */
       return ueberEmbed().then(function (ids) {
         $('#cardLinks').value = '';
-        toast(ids.length + ' Titel gefunden');
-        return ladeTracks(ids);
+        return ladeTracks(ids).then(function () { warnungWennUnvollstaendig(ids.length); });
       }).catch(function () {
         fsAus();
         openModal({
