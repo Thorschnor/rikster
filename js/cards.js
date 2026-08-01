@@ -865,6 +865,410 @@ function druckStarten() {
   }, 120);
 }
 
+
+/* ============================================================
+   ECHTE PDF-DATEI ERZEUGEN
+   ------------------------------------------------------------
+   Ohne Druckdialog: Die Seiten werden direkt als PDF gebaut und
+   heruntergeladen. Alles vektorbasiert (Rahmen, QR, Schrift),
+   dadurch gestochen scharf und millimetergenau.
+   ============================================================ */
+function ladeSkript(src) {
+  return new Promise(function (res, rej) {
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = function () { res(); };
+    s.onerror = function () { rej(new Error(src + ' konnte nicht geladen werden')); };
+    document.head.appendChild(s);
+  });
+}
+
+/* Bibliothek und Schrift erst beim ersten Export nachladen */
+function pdfBereit() {
+  var jobs = [];
+  if (!window.jspdf) jobs.push(ladeSkript('js/jspdf.js'));
+  if (!window.MONTSERRAT_BOLD) jobs.push(ladeSkript('js/font-montserrat.js'));
+  return Promise.all(jobs);
+}
+
+function hexRgb(hex) {
+  var h = String(hex || '#000000').trim();
+  if (h.charAt(0) === '#') h = h.slice(1);
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  return [parseInt(h.slice(0, 2), 16) || 0, parseInt(h.slice(2, 4), 16) || 0, parseInt(h.slice(4, 6), 16) || 0];
+}
+function rgbStr(farbe) {
+  var m = String(farbe).match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (m) return [+m[1], +m[2], +m[3]];
+  return hexRgb(farbe);
+}
+
+/* ---------- Rahmen als Vektorzeichnung ---------- */
+function rahmenPdf(doc, kind, x, y, s, seed) {
+  if (kind === 'none') return;
+  var p = function (a, b) { return [x + (a / 100) * s, y + (b / 100) * s]; };
+  var linie = function (a1, b1, a2, b2) {
+    var A = p(a1, b1), B = p(a2, b2);
+    doc.line(A[0], A[1], B[0], B[1]);
+  };
+  var kreis = function (cx, cy, r) {
+    var C = p(cx, cy);
+    doc.circle(C[0], C[1], (r / 100) * s, 'S');
+  };
+  var bogenLinie = function (cx, cy, r, a1, a2) {
+    var n = Math.max(8, Math.round(Math.abs(a2 - a1) / 8));
+    var vor = null;
+    for (var i = 0; i <= n; i++) {
+      var a = (a1 + (a2 - a1) * i / n - 90) * Math.PI / 180;
+      var pkt = [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+      if (vor) linie(vor[0], vor[1], pkt[0], pkt[1]);
+      vor = pkt;
+    }
+  };
+  var vieleck = function (cx, cy, r, n, dreh) {
+    var pk = [];
+    for (var i = 0; i < n; i++) {
+      var a = (i * 360 / n + (dreh || 0) - 90) * Math.PI / 180;
+      pk.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    for (var k = 0; k < pk.length; k++) {
+      var q = pk[(k + 1) % pk.length];
+      linie(pk[k][0], pk[k][1], q[0], q[1]);
+    }
+  };
+  var setz = function (i, dicke) {
+    var c = hexRgb(farbe(i, seed));
+    doc.setDrawColor(c[0], c[1], c[2]);
+    doc.setLineWidth(((dicke || 1.6) / 100) * s);
+  };
+
+  var i, r;
+  switch (kind) {
+    case 'rings':
+      for (i = 0; i < 6; i++) {
+        setz(i, 1.4);
+        var a0 = (seed + i * 47) % 360;
+        bogenLinie(50, 50, 48 - i * 3.4, a0, a0 + 250 - i * 12);
+      }
+      break;
+    case 'circles':
+      for (i = 0; i < 5; i++) { setz(i, 1.5); kreis(50, 50, 48 - i * 3.6); }
+      break;
+    case 'squares':
+      for (i = 0; i < 5; i++) {
+        setz(i, 1.5);
+        var d = 4 + i * 3.4, A = p(d, d);
+        doc.roundedRect(A[0], A[1], ((100 - 2 * d) / 100) * s, ((100 - 2 * d) / 100) * s, s * 0.03, s * 0.03, 'S');
+      }
+      break;
+    case 'diamond':
+      for (i = 0; i < 4; i++) { setz(i, 1.6); vieleck(50, 50, 48 - i * 4, 4, 0); }
+      break;
+    case 'hexagon':
+      for (i = 0; i < 4; i++) { setz(i, 1.6); vieleck(50, 50, 48 - i * 4, 6, i * 8); }
+      break;
+    case 'corners':
+      [[6, 6, 1, 1], [94, 6, -1, 1], [6, 94, 1, -1], [94, 94, -1, -1]].forEach(function (c, k) {
+        setz(k, 3);
+        linie(c[0] + 22 * c[2], c[1], c[0], c[1]);
+        linie(c[0], c[1], c[0], c[1] + 22 * c[3]);
+      });
+      break;
+    case 'notes':
+      for (i = 0; i < 8; i++) {
+        setz(i, 1.4);
+        var aa = (i * 45 + seed % 40) * Math.PI / 180;
+        var nx = 50 + 42 * Math.cos(aa), ny = 50 + 42 * Math.sin(aa);
+        var C = p(nx, ny);
+        doc.ellipse(C[0], C[1], (3.4 / 100) * s, (2.6 / 100) * s, 'S');
+        linie(nx + 3.2, ny, nx + 3.2, ny - 10);
+      }
+      break;
+    case 'clef':
+      setz(0, 2);
+      bogenLinie(34, 62, 14, 200, 380);
+      linie(30, 12, 26, 46);
+      linie(26, 46, 22, 70);
+      setz(2, 2);
+      bogenLinie(66, 62, 14, 160, 340);
+      linie(70, 12, 74, 46);
+      linie(74, 46, 78, 70);
+      for (i = 0; i < 4; i++) { setz(i, 0.8); linie(8, 86 + i * 3, 92, 86 + i * 3); }
+      break;
+    case 'vinyl':
+      for (i = 0; i < 9; i++) { setz(i, i % 3 === 0 ? 1.6 : 0.7); kreis(50, 50, 49 - i * 2.1); }
+      break;
+    case 'equalizer':
+      for (i = 0; i < 18; i++) {
+        var hh = 6 + (saat('eq' + i + seed) % 22);
+        setz(i, 2.6); linie(7 + i * 5, 96, 7 + i * 5, 96 - hh);
+        setz(i + 2, 2.6); linie(7 + i * 5, 4, 7 + i * 5, 4 + hh * 0.7);
+      }
+      break;
+    case 'wave':
+      for (var w = 0; w < 3; w++) {
+        setz(w, 1.6);
+        var amp = 12 - w * 3, vor = null;
+        for (i = 0; i <= 24; i++) {
+          var pk2 = [2 + i * 4, 50 + Math.sin((i / 24) * Math.PI * 4 + w) * amp];
+          if (vor) linie(vor[0], vor[1], pk2[0], pk2[1]);
+          vor = pk2;
+        }
+      }
+      break;
+    case 'dots':
+      for (i = 0; i < 36; i++) {
+        var ad = i * 10 * Math.PI / 180, D = p(50 + 46 * Math.cos(ad), 50 + 46 * Math.sin(ad));
+        var cd = hexRgb(farbe(i, seed));
+        doc.setFillColor(cd[0], cd[1], cd[2]);
+        doc.circle(D[0], D[1], (1.5 / 100) * s, 'F');
+      }
+      for (i = 0; i < 24; i++) {
+        var ae = i * 15 * Math.PI / 180, E = p(50 + 39 * Math.cos(ae), 50 + 39 * Math.sin(ae));
+        var ce = hexRgb(farbe(i + 3, seed));
+        doc.setFillColor(ce[0], ce[1], ce[2]);
+        doc.circle(E[0], E[1], (1 / 100) * s, 'F');
+      }
+      break;
+    case 'rays':
+      for (i = 0; i < 24; i++) {
+        setz(i, 2);
+        var ar = (i * 15 + seed % 15) * Math.PI / 180, r2 = 48 - (i % 3) * 4;
+        linie(50 + 36 * Math.cos(ar), 50 + 36 * Math.sin(ar), 50 + r2 * Math.cos(ar), 50 + r2 * Math.sin(ar));
+      }
+      break;
+    case 'cassette':
+      setz(0, 2);
+      var K = p(6, 18);
+      doc.roundedRect(K[0], K[1], (88 / 100) * s, (64 / 100) * s, s * 0.05, s * 0.05, 'S');
+      setz(1, 2); kreis(32, 50, 12);
+      setz(2, 2); kreis(68, 50, 12);
+      setz(3, 1.6); kreis(32, 50, 4); kreis(68, 50, 4);
+      setz(4, 1.6);
+      var L = p(26, 70);
+      doc.roundedRect(L[0], L[1], (48 / 100) * s, (8 / 100) * s, s * 0.02, s * 0.02, 'S');
+      break;
+    case 'piano':
+      for (i = 0; i < 14; i++) {
+        setz(i, 1);
+        var T = p(2 + i * 7, 2), U = p(2 + i * 7, 86);
+        doc.rect(T[0], T[1], (6 / 100) * s, (12 / 100) * s, 'S');
+        doc.rect(U[0], U[1], (6 / 100) * s, (12 / 100) * s, 'S');
+        if (i % 7 !== 2 && i % 7 !== 6) {
+          var cf = hexRgb(farbe(i, seed));
+          doc.setFillColor(cf[0], cf[1], cf[2]);
+          var V = p(6.5 + i * 7, 2), W = p(6.5 + i * 7, 86);
+          doc.rect(V[0], V[1], (3 / 100) * s, (7 / 100) * s, 'F');
+          doc.rect(W[0], W[1], (3 / 100) * s, (7 / 100) * s, 'F');
+        }
+      }
+      break;
+    case 'star':
+      for (i = 0; i < 3; i++) {
+        setz(i, 1.6);
+        var vorS = null, ersteS = null;
+        for (var j = 0; j < 20; j++) {
+          var rr = (j % 2 === 0 ? 48 : 38) - i * 4;
+          var as = (j * 18 + i * 9 + seed % 18 - 90) * Math.PI / 180;
+          var ps = [50 + rr * Math.cos(as), 50 + rr * Math.sin(as)];
+          if (vorS) linie(vorS[0], vorS[1], ps[0], ps[1]); else ersteS = ps;
+          vorS = ps;
+        }
+        if (vorS && ersteS) linie(vorS[0], vorS[1], ersteS[0], ersteS[1]);
+      }
+      break;
+    case 'speaker':
+      setz(0, 2.4); kreis(50, 50, 47);
+      setz(1, 1.2); kreis(50, 50, 40);
+      for (i = 0; i < 3; i++) {
+        setz(i + 2, 2);
+        bogenLinie(50, 50, 44 - i * 3, 300, 420);
+        bogenLinie(50, 50, 44 - i * 3, 120, 240);
+      }
+      break;
+  }
+}
+
+/* ---------- QR als Vektor, waagerecht zusammengefasst ---------- */
+function qrPdf(doc, doc_text, x, y, groesse) {
+  var qr = qrcode(0, 'M');
+  qr.addData(doc_text);
+  qr.make();
+  var n = qr.getModuleCount();
+  var m = groesse / n;
+  doc.setFillColor(0, 0, 0);
+  for (var r = 0; r < n; r++) {
+    var start = -1;
+    for (var c = 0; c <= n; c++) {
+      var dunkel = (c < n) && qr.isDark(r, c);
+      if (dunkel && start === -1) start = c;
+      if (!dunkel && start !== -1) {
+        doc.rect(x + start * m, y + r * m, (c - start) * m, m, 'F');
+        start = -1;
+      }
+    }
+  }
+}
+
+/* ---------- Kartenseiten in die PDF ---------- */
+function karteVornPdf(doc, song, x, y, s) {
+  var d = deck.design;
+  var bg = rgbStr(d.qrBg);
+  doc.setFillColor(bg[0], bg[1], bg[2]);
+  doc.rect(x, y, s, s, 'F');
+
+  rahmenPdf(doc, d.frame, x, y, s, saat(song.id || song.link || song.title));
+
+  var qs = (d.qrSize / 100) * s;
+  var qx = x + (s - qs) / 2, qy = y + (s - qs) / 2;
+  if (d.qrBorderW > 0) {
+    var bc = rgbStr(d.qrBorder);
+    var dick = (d.qrBorderW * 0.25);
+    doc.setFillColor(bc[0], bc[1], bc[2]);
+    doc.roundedRect(qx - dick, qy - dick, qs + 2 * dick, qs + 2 * dick, 1, 1, 'F');
+  }
+  doc.setFillColor(255, 255, 255);
+  doc.rect(qx, qy, qs, qs, 'F');
+  var rand = qs * 0.06;
+  qrPdf(doc, song.link, qx + rand, qy + rand, qs - 2 * rand);
+
+  if (d.label) {
+    var lc = rgbStr(d.qrBorder);
+    doc.setTextColor(lc[0], lc[1], lc[2]);
+    doc.setFont('Montserrat', 'bold');
+    doc.setFontSize(6);
+    doc.text(String(d.label), x + s / 2, y + s - 3, { align: 'center' });
+  }
+}
+
+function textMitKontur(doc, zeilen, cx, y, groesse, farbeText, konturAn, farbeKontur, zeilenhoehe) {
+  var ft = rgbStr(farbeText);
+  doc.setFontSize(groesse);
+  if (konturAn) {
+    var fk = rgbStr(farbeKontur);
+    doc.setDrawColor(fk[0], fk[1], fk[2]);
+    doc.setLineWidth(groesse * 0.035);
+    doc.setTextColor(ft[0], ft[1], ft[2]);
+    zeilen.forEach(function (z, i) {
+      doc.text(z, cx, y + i * zeilenhoehe, { align: 'center', renderingMode: 'fillThenStroke' });
+    });
+    return;
+  }
+  doc.setTextColor(ft[0], ft[1], ft[2]);
+  zeilen.forEach(function (z, i) { doc.text(z, cx, y + i * zeilenhoehe, { align: 'center' }); });
+}
+
+function karteHintenPdf(doc, song, x, y, s, jahre) {
+  var d = deck.design;
+  var bg = rgbStr(jahresFarbe(song.year, jahre.length ? jahre : [song.year || 2000]));
+  doc.setFillColor(bg[0], bg[1], bg[2]);
+  doc.rect(x, y, s, s, 'F');
+  doc.setFont('Montserrat', 'bold');
+
+  var breite = s - 6;
+  var aZeilen = doc.splitTextToSize(String(song.artist || ''), breite).slice(0, 2);
+  var tZeilen = doc.splitTextToSize(String(song.title || ''), breite).slice(0, 2);
+  var mitte = y + s / 2;
+
+  doc.setFontSize(3.6);
+  var aHoehe = aZeilen.length * 4.2;
+  textMitKontur(doc, aZeilen, x + s / 2, mitte - 9 - aHoehe + 4.2, 3.6, d.artistColor, d.artistOn, d.artistOutline, 4.2);
+
+  textMitKontur(doc, [String(song.year || '?')], x + s / 2, mitte + 5, 17, d.yearColor, d.yearOn, d.yearOutline, 0);
+
+  doc.setFontSize(3.6);
+  textMitKontur(doc, tZeilen, x + s / 2, mitte + 12, 3.6, d.titleColor, d.titleOn, d.titleOutline, 4.2);
+
+  if (d.label) {
+    var lc = rgbStr(d.titleColor);
+    doc.setTextColor(lc[0], lc[1], lc[2]);
+    doc.setFontSize(5);
+    doc.text(String(d.label), x + s / 2, y + s - 3, { align: 'center' });
+  }
+}
+
+/* ---------- Gesamtdokument ---------- */
+function baueDokument(jsPDF) {
+  var doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  doc.addFileToVFS('Montserrat-Bold.ttf', MONTSERRAT_BOLD);
+  doc.addFont('Montserrat-Bold.ttf', 'Montserrat', 'bold');
+  doc.setFont('Montserrat', 'bold');
+
+  var jahre = deck.songs.map(function (s) { return s.year; }).filter(function (y) { return !!y; });
+  var proSeite = SEITE.spalten * SEITE.zeilen;
+  var erste = true;
+
+  for (var i = 0; i < deck.songs.length; i += proSeite) {
+    var teil = deck.songs.slice(i, i + proSeite);
+
+    if (!erste) doc.addPage();
+    erste = false;
+    var bg = rgbStr(deck.design.qrBg);
+    doc.setFillColor(bg[0], bg[1], bg[2]);
+    doc.rect(0, 0, 210, 297, 'F');
+    teil.forEach(function (song, idx) {
+      var sp = idx % SEITE.spalten, ze = Math.floor(idx / SEITE.spalten);
+      karteVornPdf(doc, song, SEITE.randX + sp * SEITE.karte, SEITE.randY + ze * SEITE.karte, SEITE.karte);
+    });
+    if (deck.design.borders) schnittlinien(doc, teil.length);
+
+    doc.addPage();
+    doc.setFillColor(255, 255, 255);
+    doc.rect(0, 0, 210, 297, 'F');
+    teil.forEach(function (song, idx) {
+      var sp = (SEITE.spalten - 1) - (idx % SEITE.spalten), ze = Math.floor(idx / SEITE.spalten);
+      karteHintenPdf(doc, song, SEITE.randX + sp * SEITE.karte, SEITE.randY + ze * SEITE.karte, SEITE.karte, jahre);
+    });
+    if (deck.design.borders) schnittlinien(doc, teil.length);
+  }
+  return doc;
+}
+
+/* Feine Hilfslinien zum Ausschneiden */
+function schnittlinien(doc, anzahl) {
+  doc.setDrawColor(150, 150, 150);
+  doc.setLineWidth(0.1);
+  var zeilen = Math.ceil(anzahl / SEITE.spalten);
+  for (var c = 0; c <= SEITE.spalten; c++) {
+    var x = SEITE.randX + c * SEITE.karte;
+    doc.line(x, SEITE.randY, x, SEITE.randY + zeilen * SEITE.karte);
+  }
+  for (var r = 0; r <= zeilen; r++) {
+    var y = SEITE.randY + r * SEITE.karte;
+    doc.line(SEITE.randX, y, SEITE.randX + SEITE.spalten * SEITE.karte, y);
+  }
+}
+
+function pdfErzeugen() {
+  if (!deck.songs.length) { toast('Noch keine Karten in der Liste'); return; }
+  var fehlend = deck.songs.filter(function (s) { return !s.year; });
+  if (fehlend.length) {
+    openModal({
+      title: 'Jahre fehlen',
+      text: fehlend.length + ' Karten haben noch kein Jahr. Trage es in der Liste nach \u2013 sonst steht auf der R\u00fcckseite ein Fragezeichen.',
+      primary: 'Trotzdem erstellen', onPrimary: pdfStarten, secondary: 'Zur\u00fcck'
+    });
+    return;
+  }
+  pdfStarten();
+}
+
+function pdfStarten() {
+  toast('PDF wird erstellt \u2026');
+  pdfBereit().then(function () {
+    var doc = baueDokument(window.jspdf.jsPDF);
+    var name = 'rikster-karten-' + deck.songs.length + '.pdf';
+    doc.save(name);
+    toast(Math.ceil(deck.songs.length / 20) * 2 + ' Seiten fertig');
+  }).catch(function (e) {
+    openModal({
+      title: 'PDF konnte nicht erstellt werden',
+      text: (e && e.message) ? e.message : 'Unbekannter Fehler.',
+      primary: 'OK'
+    });
+  });
+}
+
 /* ============================================================
    EVENTS
    ============================================================ */
@@ -877,7 +1281,7 @@ document.addEventListener('DOMContentLoaded', function () {
   $('#btnCardLinks').addEventListener('click', onAddLinks);
   $('#btnAddSelected').addEventListener('click', ausgewaehlteHinzufuegen);
   $('#btnSearchClose').addEventListener('click', function () { suchListeSchliessen(); });
-  $('#btnCardsPrint').addEventListener('click', baueDruck);
+  $('#btnCardsPrint').addEventListener('click', pdfErzeugen);
   $('#btnCardsClear').addEventListener('click', function () {
     if (!deck.songs.length) return;
     openModal({
