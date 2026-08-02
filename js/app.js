@@ -1190,16 +1190,21 @@ function fetchTrackInfo(trackId, cardMeta) {
        oft Remaster/Compilations mit späterem Datum. */
     var korrektur = fixGet(trackId) || {};
     var schritt = Promise.resolve();
-    if (cardMeta) {
-      info.cardArtist = cardMeta.artist;
-      if (cardMeta.year) {
+    if (cardMeta) info.cardArtist = cardMeta.artist;
+
+    /* Welches Jahr gilt? Reihenfolge:
+       1. Eigene Korrektur (wird weiter unten angewendet)
+       2. Aufdruck der offiziellen Karte
+       3. Sonst IMMER gegenprüfen - Spotify nennt bei Remastern und
+          Neuaufnahmen das Datum der Neuveröffentlichung, nicht das
+          Original. Das gilt auch für selbst erstellte Karten. */
+    if (!korrektur.year) {
+      if (cardMeta && cardMeta.year) {
         applyYear(info, cardMeta.year);
-      } else if (!korrektur.year) {
-        /* Karte ohne Jahresangabe: über mehrere Quellen gegenprüfen.
-           Bei eigener Jahreskorrektur entfällt die Suche komplett. */
+      } else {
         schritt = pruefeJahr(
-          korrektur.artist || cardMeta.artist || info.artists[0],
-          korrektur.title || cardMeta.title || info.name,
+          korrektur.artist || (cardMeta && cardMeta.artist) || info.artists[0],
+          korrektur.title || (cardMeta && cardMeta.title) || info.name,
           parseInt(info.year, 10)
         ).then(function (r) {
           var sy = parseInt(info.year, 10);

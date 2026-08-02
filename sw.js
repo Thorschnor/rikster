@@ -3,7 +3,7 @@
    - Seitenaufrufe & veränderliche Dateien (config.js, app.js, CSS …):
      erst Netz, Cache nur als Fallback → Änderungen kommen sofort an.
    - Große, unveränderliche Dateien (jsQR.js, Icons, data/): erst Cache. */
-const CACHE = 'rikster-v52';
+const CACHE = 'rikster-v53';
 const ASSETS = [
   './',
   'index.html',
