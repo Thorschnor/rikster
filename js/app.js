@@ -60,6 +60,7 @@ var state = {
   wakeLock: null,
   assists: true,
   controls: false,
+  spielMarke: 0,
   gameMode: 'normal',
   hints: { list: null, idx: -1, promise: null }
 };
@@ -467,6 +468,15 @@ function activateAudio() {
   } catch (e) { /* egal */ }
 }
 
+/* Die Angaben werden vom Player gelegentlich überschrieben, deshalb
+   kurz nach dem Start mehrfach neu setzen. */
+function maskMediaSessionWiederholt() {
+  maskMediaSession();
+  [400, 1200, 2500, 4000].forEach(function (ms) {
+    setTimeout(function () { if (state.playing) maskMediaSession(); }, ms);
+  });
+}
+
 function maskMediaSession() {
   try {
     if ('mediaSession' in navigator && window.MediaMetadata) {
@@ -525,23 +535,38 @@ function playRemote(body, excludeId) {
    SDK-Player nach dem Start nachweislich stumm, übernimmt dauerhaft die
    Fernsteuerung der Spotify-App – da ist der Ton garantiert. */
 function verifySdkAudio(body) {
-  setTimeout(function () {
+  var versuche = 0;
+  var marke = state.spielMarke;
+
+  function pruefen() {
+    /* Nur weiterprüfen, solange derselbe Song noch in der App läuft */
+    if (marke !== state.spielMarke) return;
     if (!state.playing || state.mode !== 'sdk' || !state.sdkPlayer) return;
     state.sdkPlayer.getCurrentState().then(function (st) {
-      if (st && !st.paused) return; /* spielt hörbar */
-      console.warn('In-App-Player stumm \u2013 wechsle auf Fernsteuerung');
-      var silent = state.sdkPlayer;
-      var silentId = state.sdkDeviceId;
+      if (st && !st.paused) { maskMediaSession(); return; }   /* läuft hörbar */
+
+      /* Kein Zustand oder noch pausiert: Das kann direkt nach dem Start
+         normal sein, während der Player erst aktiv wird. Deshalb mehrfach
+         nachsehen und erst danach auf die Fernsteuerung wechseln - sonst
+         verlieren wir unnötig die Titel-Maskierung in der Statusleiste. */
+      versuche++;
+      if (versuche < 4) { setTimeout(pruefen, 1800); return; }
+
+      console.warn('In-App-Player bleibt stumm \u2013 wechsle auf Fernsteuerung');
+      var stumm = state.sdkPlayer;
+      var stummId = state.sdkDeviceId;
       state.mode = 'remote';
       state.sdkReady = false;
       state.sdkPlayer = null;
-      try { silent.disconnect(); } catch (e) { /* egal */ }
+      try { stumm.disconnect(); } catch (e) { /* egal */ }
       setModeBadge('Wiedergabe \u00fcber deine Spotify-App');
-      playRemote(body, silentId).then(function () {
+      playRemote(body, stummId).then(function () {
         setPlayerStatus('L\u00e4uft');
       }).catch(handlePlayError);
     }).catch(function () { /* egal */ });
-  }, 2500);
+  }
+
+  setTimeout(pruefen, 2500);
 }
 
 function stopPlayback() {
@@ -2036,6 +2061,7 @@ function onScanned(scan) {
 }
 
 function startTrack(trackId, cardMeta) {
+  state.spielMarke++;
   state.currentTrackId = trackId;
   state.cardMeta = cardMeta || null;
   state.trackInfo = null;
@@ -2058,7 +2084,7 @@ function startTrack(trackId, cardMeta) {
   playTrack(trackId).then(function () {
     state.playing = true;
     setPlayerStatus('L\u00e4uft');
-    maskMediaSession();
+    maskMediaSessionWiederholt();
     startPlaybackUi();
   }).catch(handlePlayError);
 }
@@ -2142,7 +2168,7 @@ function retryPlay() {
   playTrack(state.currentTrackId).then(function () {
     state.playing = true;
     setPlayerStatus('L\u00e4uft');
-    maskMediaSession();
+    maskMediaSessionWiederholt();
   }).catch(handlePlayError);
 }
 
