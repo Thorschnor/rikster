@@ -429,7 +429,9 @@ function partyUtilityScan(scan, purpose) {
       state.trackInfo = info;
       state.infoPromise = Promise.resolve(info);
       resetHints();
-      applyUtilityCard(purpose, info);
+      /* Erst werten, wenn das geprüfte Jahr da ist */
+      var warten = info.jahrJob ? info.jahrJob.catch(function () { /* egal */ }) : Promise.resolve();
+      return warten.then(function () { applyUtilityCard(purpose, info); });
     });
   }).catch(function (err) {
     utilityError(err, scan, purpose);
@@ -692,6 +694,12 @@ function onSlotPick(idx) {
   placeBusy = true;
   if (!state.trackInfo) toast('Einen Moment \u2013 Song-Infos werden geladen \u2026');
   var infoP = state.trackInfo ? Promise.resolve(state.trackInfo) : (state.infoPromise || Promise.resolve(null));
+  /* Läuft die Jahresprüfung noch, kurz abwarten - sonst würde mit dem
+     vorläufigen Jahr von Spotify gewertet. */
+  infoP = infoP.then(function (info) {
+    if (info && info.jahrJob) return info.jahrJob.then(function () { return info; }, function () { return info; });
+    return info;
+  });
   infoP.then(function (info) {
     if (!party || party.purpose !== 'guess') { placeBusy = false; return; }
     if (!info) {

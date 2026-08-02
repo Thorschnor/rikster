@@ -1189,6 +1189,34 @@ function findOriginalYear(artist, title) {
     .catch(function () { return null; });
 }
 
+/* Prüft das Jahr nachträglich und aktualisiert alles, was daran hängt.
+   Läuft nebenher, damit Wiedergabe und Auflösung nicht warten müssen. */
+function jahrImHintergrund(info, cardMeta, korrektur) {
+  return pruefeJahr(
+    korrektur.artist || (cardMeta && cardMeta.artist) || info.artists[0],
+    korrektur.title || (cardMeta && cardMeta.title) || info.name,
+    parseInt(info.year, 10)
+  ).then(function (r) {
+    var sy = parseInt(info.year, 10);
+    if (!r || !r.jahr || (isFinite(sy) && r.jahr === sy)) return;
+
+    applyYear(info, r.jahr);
+    info.jahrQuelle = r.quelle;
+
+    /* Alles neu aufbauen, was vom Jahr abhängt */
+    info.yearSongs = null;
+    info.yearEvents = null;
+    if (state.trackInfo === info) {
+      resetHints();
+      if (state.assists) prepareHints(info);
+    }
+    if ($('#revealSheet').classList.contains('open')) renderReveal(info);
+    return fetchYearContext(info).then(function () {
+      if ($('#revealSheet').classList.contains('open')) renderReveal(info);
+    }).catch(function () { /* egal */ });
+  }).catch(function () { /* egal */ });
+}
+
 function fetchTrackInfo(trackId, cardMeta) {
   return api('/tracks/' + trackId).then(function (res) {
     if (!res.ok) {
@@ -1214,37 +1242,22 @@ function fetchTrackInfo(trackId, cardMeta) {
     /* Bei offiziellen Karten gilt das Jahr der Karte – Spotify listet
        oft Remaster/Compilations mit späterem Datum. */
     var korrektur = fixGet(trackId) || {};
-    var schritt = Promise.resolve();
     if (cardMeta) info.cardArtist = cardMeta.artist;
 
     /* Welches Jahr gilt? Reihenfolge:
-       1. Eigene Korrektur (wird weiter unten angewendet)
+       1. Eigene Korrektur (wird gleich unten angewendet)
        2. Aufdruck der offiziellen Karte
-       3. Sonst IMMER gegenprüfen - Spotify nennt bei Remastern und
-          Neuaufnahmen das Datum der Neuveröffentlichung, nicht das
-          Original. Das gilt auch für selbst erstellte Karten. */
-    if (!korrektur.year) {
-      if (cardMeta && cardMeta.year) {
-        applyYear(info, cardMeta.year);
-      } else {
-        schritt = pruefeJahr(
-          korrektur.artist || (cardMeta && cardMeta.artist) || info.artists[0],
-          korrektur.title || (cardMeta && cardMeta.title) || info.name,
-          parseInt(info.year, 10)
-        ).then(function (r) {
-          var sy = parseInt(info.year, 10);
-          if (r && r.jahr && (!isFinite(sy) || r.jahr !== sy)) {
-            applyYear(info, r.jahr);
-            info.jahrQuelle = r.quelle;
-          }
-        }).catch(function () { /* egal */ });
-      }
+       3. Sonst gegenprüfen - aber IM HINTERGRUND. Die Songdaten stehen
+          dadurch sofort bereit, das geprüfte Jahr wird nachgereicht.
+          Sonst müsste die Auflösung auf MusicBrainz und Wikipedia warten. */
+    if (!korrektur.year && cardMeta && cardMeta.year) {
+      applyYear(info, cardMeta.year);
+    } else if (!korrektur.year) {
+      info.jahrJob = jahrImHintergrund(info, cardMeta, korrektur);
     }
-    return schritt.then(function () {
-      applyFixes(info);            /* eigene Korrekturen haben Vorrang */
-      info.extras = fetchExtras(info);
-      return info;
-    });
+    applyFixes(info);              /* eigene Korrekturen haben Vorrang */
+    info.extras = fetchExtras(info);
+    return info;
   });
 }
 
@@ -2222,6 +2235,12 @@ function showReveal(force) {
     renderReveal(info);
     if (info && info.extras) {
       info.extras.then(function () {
+        if (sheet.classList.contains('open')) renderReveal(info);
+      });
+    }
+    /* Das geprüfte Jahr kommt evtl. etwas später - dann neu zeichnen */
+    if (info && info.jahrJob) {
+      info.jahrJob.then(function () {
         if (sheet.classList.contains('open')) renderReveal(info);
       });
     }
