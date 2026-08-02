@@ -2080,9 +2080,15 @@ function startTrack(trackId, cardMeta) {
   state.trackInfo = null;
   state.infoError = null;
   resetHints();
+  resetPlaybackUi();          /* sofort, nicht erst nach der Antwort */
 
   state.infoPromise = fetchTrackInfo(trackId, state.cardMeta).then(function (info) {
     state.trackInfo = info;
+    /* Songlänge sofort in die Leiste übernehmen */
+    if (state.controls && info && info.duration) {
+      pb.durMs = info.duration;
+      renderPlayback();
+    }
     if (state.assists) prepareHints(info);
     return info;
   }).catch(function (e) {
@@ -2510,6 +2516,29 @@ function fmtTime(ms) {
 }
 
 function pbVisible() { return state.controls && state.currentTrackId; }
+
+/* Beim Songwechsel SOFORT zurücksetzen: alten Zähler stoppen, Leiste
+   auf null, Zeiten leeren. Sonst läuft die Zeit des vorherigen Titels
+   weiter und überschreibt auch die drehende Schallplatte. */
+function resetPlaybackUi() {
+  if (pb.tick) { clearInterval(pb.tick); pb.tick = null; }
+  if (pb.sync) { clearInterval(pb.sync); pb.sync = null; }
+  pb.posMs = 0;
+  pb.durMs = 0;
+  pb.paused = false;
+  pb.dragging = false;
+  pb.basis = Date.now();
+  var el = $('#playback');
+  if (el) el.hidden = !state.controls;
+  if (state.controls) {
+    $('#pbFill').style.width = '0%';
+    $('#pbKnob').style.left = '0%';
+    $('#pbCur').textContent = '0:00';
+    $('#pbTot').textContent = '--:--';
+    $('#icoPause').style.display = '';
+    $('#icoPlay').style.display = 'none';
+  }
+}
 
 function startPlaybackUi() {
   $('#playback').hidden = !pbVisible();
