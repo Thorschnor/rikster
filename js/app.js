@@ -1083,15 +1083,12 @@ function pruefeJahr(artist, title, spotifyJahr) {
     if (db) return { jahr: db, quelle: 'Kartendatenbank' };
 
     return jahrAusMusicBrainz(artist, title).then(function (mb) {
+      /* MusicBrainz nennt bereits die ERSTE Veröffentlichung der
+         Aufnahme - dann muss Wikipedia gar nicht mehr gefragt werden.
+         Das spart pro Song mehrere Abrufe. */
+      if (mb) return { jahr: mb, quelle: 'MusicBrainz' };
+
       return jahrAusWikipedia(artist, title).then(function (wiki) {
-        /* MusicBrainz und Wikipedia gegeneinander prüfen: Liegt
-           Wikipedia früher, ist das meist die Erstveröffentlichung
-           (Single vor Album) - dann gewinnt der frühere Wert. */
-        if (mb && wiki) {
-          var jahr = Math.min(mb, wiki);
-          return { jahr: jahr, quelle: (jahr === mb ? 'MusicBrainz' : 'Wikipedia') };
-        }
-        if (mb) return { jahr: mb, quelle: 'MusicBrainz' };
         if (wiki) return { jahr: wiki, quelle: 'Wikipedia' };
 
         /* Kein weiterer Spotify-Aufruf: Die Suche dort lieferte ohnehin
@@ -1199,6 +1196,7 @@ function jahrImHintergrund(info, cardMeta, korrektur) {
   ).then(function (r) {
     var sy = parseInt(info.year, 10);
     if (!r || !r.jahr || (isFinite(sy) && r.jahr === sy)) return;
+    if (!nochAktuell(info)) return;          /* Song ist längst gewechselt */
 
     applyYear(info, r.jahr);
     info.jahrQuelle = r.quelle;
@@ -1217,7 +1215,27 @@ function jahrImHintergrund(info, cardMeta, korrektur) {
   }).catch(function () { /* egal */ });
 }
 
+/* Ist die Hintergrundarbeit für diesen Song noch gewollt? Sobald ein
+   neuer Song gescannt wird, wird alles Alte fallengelassen - sonst
+   stapelt sich die Arbeit und die App wird zäh. */
+function spaeter(ms) {
+  return new Promise(function (r) { setTimeout(r, ms); });
+}
+
+function nochAktuell(info) {
+  return !info || info._marke === undefined || info._marke === state.spielMarke;
+}
+
+var trackSpeicher = {};      /* bereits geladene Songdaten dieser Sitzung */
+
 function fetchTrackInfo(trackId, cardMeta) {
+  var marke = state.spielMarke;
+  var alt = trackSpeicher[trackId];
+  if (alt && !cardMeta) {
+    /* Schon einmal geladen: sofort verwenden, keine neue Hintergrundarbeit */
+    alt._marke = marke;
+    return Promise.resolve(alt);
+  }
   return api('/tracks/' + trackId).then(function (res) {
     if (!res.ok) {
       return readApiError(res).then(function (d) { throw { code: 'INFO', detail: d }; });
@@ -1226,6 +1244,7 @@ function fetchTrackInfo(trackId, cardMeta) {
   }).then(function (t) {
     var album = t.album || {};
     var info = {
+      _marke: marke,
       id: trackId,
       name: t.name,
       artists: (t.artists || []).map(function (a) { return a.name; }),
@@ -1257,6 +1276,7 @@ function fetchTrackInfo(trackId, cardMeta) {
     }
     applyFixes(info);              /* eigene Korrekturen haben Vorrang */
     info.extras = fetchExtras(info);
+    trackSpeicher[trackId] = info;
     return info;
   });
 }
@@ -1264,6 +1284,7 @@ function fetchTrackInfo(trackId, cardMeta) {
 /* Zusatzinfos aus mehreren Quellen – alles best-effort und parallel */
 function fetchExtras(info) {
   var jobs = [];
+  if (!nochAktuell(info)) return Promise.resolve(info);
 
   /* Spotify: Genres + Follower des Interpreten */
   if (info.artistId) {
@@ -1300,14 +1321,23 @@ function fetchExtras(info) {
 
   /* Wikipedia (Song-Artikel): Charts, Auszeichnungen, Verkäufe
      + Wikidata: Sprache des Songs */
-  info._articleJob = fetchSongArticleData(info).catch(function () { /* egal */ });
+  /* Ganze Wikipedia-Seite laden und zerlegen ist der teuerste Schritt.
+     Erst nach kurzer Wartezeit starten: Wer sofort weiterscannt, löst
+     ihn dadurch gar nicht erst aus. */
+  info._articleJob = spaeter(900).then(function () {
+    if (!nochAktuell(info)) return null;
+    return fetchSongArticleData(info);
+  }).catch(function () { /* egal */ });
   jobs.push(info._articleJob);
 
   /* Jahres-Kontext: 5 weitere Lieder + 5 Ereignisse desselben Jahres */
   jobs.push(fetchYearContext(info).catch(function () { /* egal */ }));
 
   /* Songfacts: erster Fact, übersetzt */
-  jobs.push(fetchSongfact(info).then(function (sf) {
+  jobs.push(spaeter(1200).then(function () {
+    if (!nochAktuell(info)) return null;
+    return fetchSongfact(info);
+  }).then(function (sf) {
     if (sf) info.songfact = sf;
   }).catch(function () { /* egal */ }));
 
@@ -1588,8 +1618,9 @@ function fetchQid(lang, title) {
 }
 
 function fetchSongArticleData(info) {
+  if (!nochAktuell(info)) return Promise.resolve(null);
   var deJob = findWikiArticle('de', info).then(function (t) {
-    if (!t) return null;
+    if (!t || !nochAktuell(info)) return null;
     info.deArticle = t;
     return fetchPlainExtract('de', t).then(function (txt) {
       parseDeSongText(txt, info);
@@ -1598,9 +1629,12 @@ function fetchSongArticleData(info) {
   }).catch(function () { return null; });
 
   var enJob = findWikiArticle('en', info).then(function (t) {
-    if (!t) return null;
+    if (!t || !nochAktuell(info)) return null;
     info.enArticle = t;
+    /* Der englische Artikel wird als ganze Seite geladen und zerlegt -
+       das ist der teuerste Schritt, deshalb hier nochmal prüfen. */
     return fetchArticleHtml('en', t).then(function (html) {
+      if (!nochAktuell(info)) return null;
       parseEnSongHtml(html, info);
       return t;
     });
@@ -1778,7 +1812,7 @@ function fetchSongfact(info) {
 /* ---------- Jahres-Kontext für die Auflösung ---------- */
 function fetchYearContext(info) {
   var year = parseInt(info.year, 10);
-  if (!isFinite(year)) return Promise.resolve(null);
+  if (!isFinite(year) || !nochAktuell(info)) return Promise.resolve(null);
   var songsJob = fetchYearSongs(info, year).then(function (list) {
     if (list && list.length) info.yearSongs = list;
   }).catch(function () { /* egal */ });
