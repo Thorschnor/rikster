@@ -537,7 +537,7 @@ function kartenRueckseite(song, jahre, px) {
        immer an derselben Stelle und wachsen nur nach unten. */
     a.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:12.5%';
     y.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:50%;transform:translateY(-50%)';
-    t.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:64.5%';
+    t.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';bottom:12.5%';
     el.appendChild(a); el.appendChild(y); el.appendChild(t);
   } else {
     if (px) el.style.cssText += ';display:flex;flex-direction:column;align-items:center;justify-content:center';
@@ -1758,7 +1758,7 @@ function karteHintenPdf(doc, song, x, y, s, jahre) {
        bleiben dadurch auf allen Karten gleich. */
     var bandHoehe = s * 0.205;
     var aOben = y + s * 0.125;          /* Oberkante des Interpreten */
-    var tOben = y + s * 0.645;          /* Oberkante des Titels */
+    var tUnten = y + s * 0.875;         /* Unterkante des Titels - spiegelbildlich */
 
     var aBand = passtInBand(doc, song.artist, breite, bandHoehe, ptText);
     var tBand = passtInBand(doc, song.title, breite, bandHoehe, ptText);
@@ -1772,7 +1772,10 @@ function karteHintenPdf(doc, song, x, y, s, jahre) {
     var yA = aOben + aBand.pt * 25.4 / 72 * 0.72;
     textMitKontur(doc, aBand.zeilen, cx, yA, aBand.pt, d.artistColor, d.artistOn, d.artistOutline, aBand.zh);
 
-    var yT = tOben + tBand.pt * 25.4 / 72 * 0.72;
+    /* Der Titel sitzt mit seiner UNTERKANTE fest und wächst nach oben -
+       genau andersherum als der Interpret. Dadurch ist der Abstand zum
+       Jahr oben und unten gleich, egal wie viele Zeilen der Titel hat. */
+    var yT = tUnten - (tBand.zeilen.length - 1) * tBand.zh;
     textMitKontur(doc, tBand.zeilen, cx, yT, tBand.pt, d.titleColor, d.titleOn, d.titleOutline, tBand.zh);
   } else {
     /* Kompakt: Jahr exakt mittig, Interpret und Titel wachsen nach außen */
