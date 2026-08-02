@@ -437,7 +437,17 @@ function initPlayback() {
         console.warn('SDK playback_error', ev && ev.message);
       });
       player.addListener('player_state_changed', function (st) {
-        if (st) maskMediaSession();
+        if (!st) return;
+        maskMediaSession();
+        /* Meldet der Player den aktuellen Titel, Anzeige auffrischen */
+        var lauft = st.track_window && st.track_window.current_track;
+        if (state.controls && lauft && lauft.id && lauft.id === state.currentTrackId) {
+          pb.posMs = st.position;
+          pb.durMs = st.duration || pb.durMs;
+          pb.paused = st.paused;
+          pb.basis = Date.now();
+          renderPlayback();
+        }
       });
 
       player.connect();
@@ -2607,9 +2617,17 @@ function stopPlaybackUi() {
 /* Stand von Spotify holen - beim In-App-Player kostenlos, sonst per Abfrage */
 function syncPlayback() {
   if (!pbVisible() || pb.dragging) return;
+  var marke = state.spielMarke;
+
   if (state.mode === 'sdk' && state.sdkPlayer) {
     state.sdkPlayer.getCurrentState().then(function (s) {
       if (!s) return;
+      /* Nach einem Songwechsel meldet der Player für ein paar Sekunden
+         noch den VORHERIGEN Titel. Ohne diese Prüfung würde die alte
+         Zeit zurückkommen und die drehende Schallplatte anhalten. */
+      if (marke !== state.spielMarke) return;
+      var lauft = s.track_window && s.track_window.current_track;
+      if (lauft && lauft.id && state.currentTrackId && lauft.id !== state.currentTrackId) return;
       pb.posMs = s.position;
       pb.durMs = s.duration || pb.durMs;
       pb.paused = s.paused;
@@ -2618,11 +2636,13 @@ function syncPlayback() {
     }).catch(function () { /* egal */ });
     return;
   }
+
   api('/me/player').then(function (res) {
     if (!res.ok) return null;
     return safeJson(res);
   }).then(function (j) {
     if (!j || !j.item) return;
+    if (marke !== state.spielMarke) return;
     if (j.item.id && state.currentTrackId && j.item.id !== state.currentTrackId) return; /* anderer Song laeuft */
     pb.posMs = j.progress_ms || 0;
     pb.durMs = (j.item && j.item.duration_ms) || pb.durMs;
