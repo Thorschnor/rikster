@@ -46,6 +46,7 @@ var deck = { songs: [], design: {} };
 Object.keys(DESIGN_STD).forEach(function (k) { deck.design[k] = DESIGN_STD[k]; });
 var deckImage = null;    /* Hintergrundbild als Data-URL, liegt in IndexedDB */
 var deckSymbol = null;   /* Editions-Symbol als Data-URL */
+var bildGeprueft = false;
 
 /* ============================================================
    SPEICHER
@@ -94,7 +95,23 @@ function imgLoad() {
       var laden = 2;
       function fertig() { if (--laden <= 0) res(); }
       var q1 = tx.objectStore('kv').get('cardImage');
-      q1.onsuccess = function () { deckImage = q1.result || null; fertig(); };
+      q1.onsuccess = function () {
+        deckImage = q1.result || null;
+        /* Bilder aus früheren Fassungen sind evtl. nicht quadratisch
+           und liegen im Originalformat vor - einmalig nachbessern,
+           damit sie auch im PDF landen. */
+        if (deckImage && !bildGeprueft) {
+          bildGeprueft = true;
+          bildAufbereiten(deckImage, 1000, true).then(function (png) {
+            if (png && png !== deckImage) {
+              deckImage = png;
+              imgSave(png);
+              renderDesignPreview();
+            }
+          }).catch(function () { /* egal */ });
+        }
+        fertig();
+      };
       q1.onerror = fertig;
       var q2 = tx.objectStore('kv').get('cardSymbol');
       q2.onsuccess = function () { deckSymbol = q2.result || null; fertig(); };
@@ -117,26 +134,47 @@ function symbolLoeschen() {
   }).catch(function () { /* egal */ });
 }
 
-/* Bild auf handliche Größe bringen und in PNG umwandeln -
-   so kommt es zuverlässig in die PDF und bläht sie nicht auf. */
-function bildAufbereiten(datei, maxKante) {
+/* Datei oder Data-URL zu einer Data-URL machen */
+function alsDataUrl(quelle) {
+  if (typeof quelle === 'string') return Promise.resolve(quelle);
   return new Promise(function (res, rej) {
     var leser = new FileReader();
-    leser.onload = function () {
+    leser.onload = function () { res(leser.result); };
+    leser.onerror = function () { rej(new Error('Datei nicht lesbar')); };
+    leser.readAsDataURL(quelle);
+  });
+}
+
+/* Bild auf handliche Größe bringen und in PNG umwandeln - so kommt es
+   zuverlässig in die PDF und bläht sie nicht auf. Mit quadratisch=true
+   wird mittig auf ein Quadrat beschnitten, genau wie es die Vorschau
+   mit "cover" anzeigt - dadurch sehen Vorschau und Druck gleich aus. */
+function bildAufbereiten(quelle, maxKante, quadratisch) {
+  return alsDataUrl(quelle).then(function (dataUrl) {
+    return new Promise(function (res, rej) {
       var bild = new Image();
       bild.onload = function () {
-        var k = Math.min(1, maxKante / Math.max(bild.width, bild.height));
-        var b = Math.round(bild.width * k), hh = Math.round(bild.height * k);
         var c = document.createElement('canvas');
-        c.width = b; c.height = hh;
-        c.getContext('2d').drawImage(bild, 0, 0, b, hh);
+        var ctx;
+        if (quadratisch) {
+          var kante = Math.min(bild.width, bild.height);
+          var sx = Math.round((bild.width - kante) / 2);
+          var sy = Math.round((bild.height - kante) / 2);
+          var ziel = Math.min(maxKante, kante);
+          c.width = ziel; c.height = ziel;
+          ctx = c.getContext('2d');
+          ctx.drawImage(bild, sx, sy, kante, kante, 0, 0, ziel, ziel);
+        } else {
+          var k = Math.min(1, maxKante / Math.max(bild.width, bild.height));
+          c.width = Math.round(bild.width * k);
+          c.height = Math.round(bild.height * k);
+          c.getContext('2d').drawImage(bild, 0, 0, c.width, c.height);
+        }
         try { res(c.toDataURL('image/png')); } catch (e) { rej(e); }
       };
       bild.onerror = function () { rej(new Error('Bild nicht lesbar')); };
-      bild.src = leser.result;
-    };
-    leser.onerror = function () { rej(new Error('Datei nicht lesbar')); };
-    leser.readAsDataURL(datei);
+      bild.src = dataUrl;
+    });
   });
 }
 function imgClear() {
@@ -495,9 +533,11 @@ function kartenRueckseite(song, jahre, px) {
        Interpret und Titel symmetrisch bei 22 % und 78 %. */
     el.style.cssText += ';display:block;position:relative';
     var seit = (px * 0.042).toFixed(1) + 'px';
-    a.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:15.5%';
+    /* Feste Oberkanten wie in der PDF: Interpret und Titel beginnen
+       immer an derselben Stelle und wachsen nur nach unten. */
+    a.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:12.5%';
     y.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:50%;transform:translateY(-50%)';
-    t.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';bottom:15.5%';
+    t.style.cssText += ';position:absolute;left:' + seit + ';right:' + seit + ';top:64.5%';
     el.appendChild(a); el.appendChild(y); el.appendChild(t);
   } else {
     if (px) el.style.cssText += ';display:flex;flex-direction:column;align-items:center;justify-content:center';
@@ -1581,6 +1621,14 @@ function karteVornPdf(doc, song, x, y, s) {
   doc.setFillColor(bg[0], bg[1], bg[2]);
   doc.rect(x, y, s, s, 'F');
 
+  /* Eigenes Hintergrundbild - liegt quadratisch vor und füllt die
+     Karte damit genau aus, so wie es die Vorschau zeigt. */
+  if (deckImage) {
+    try {
+      doc.addImage(deckImage, 'PNG', x, y, s, s, undefined, 'FAST');
+    } catch (e) { /* Bild nicht verwendbar - Karte bleibt trotzdem korrekt */ }
+  }
+
   rahmenPdf(doc, d.frame, x, y, s, saat(song.id || song.link || song.title));
 
   var qs = (d.qrSize / 100) * s;
@@ -1645,6 +1693,24 @@ function textMitKontur(doc, zeilen, cx, y, groesse, farbeText, konturAn, farbeKo
   zeilen.forEach(function (z, i) { doc.text(z, cx, y + i * zeilenhoehe, { align: 'center' }); });
 }
 
+/* Passt einen Text in einen Bereich fester Höhe ein: erst umbrechen,
+   und wenn er zu hoch wird, so lange verkleinern, bis er hineinpasst.
+   Liefert Zeilen, Schriftgröße und Zeilenhöhe zurück. */
+function passtInBand(doc, text, breite, maxHoehe, startPt) {
+  var pt = startPt;
+  for (var i = 0; i < 16; i++) {
+    doc.setFontSize(pt);
+    var zeilen = doc.splitTextToSize(String(text || ''), breite);
+    var zh = pt * 25.4 / 72 * 1.15;
+    if (zeilen.length * zh <= maxHoehe || pt <= startPt * 0.4) {
+      return { zeilen: zeilen, pt: pt, zh: zh };
+    }
+    pt = pt * 0.93;
+  }
+  doc.setFontSize(pt);
+  return { zeilen: doc.splitTextToSize(String(text || ''), breite), pt: pt, zh: pt * 25.4 / 72 * 1.15 };
+}
+
 function karteHintenPdf(doc, song, x, y, s, jahre) {
   var d = deck.design;
   var bg = rgbStr(jahresFarbe(song.year, jahre.length ? jahre : [song.year || 2000]));
@@ -1685,29 +1751,29 @@ function karteHintenPdf(doc, song, x, y, s, jahre) {
   var cx = x + s / 2;
 
   if (d.hitFormat) {
-    /* Originalkarten-Anordnung: Das Jahr sitzt exakt in der Kartenmitte,
-       Interpret und Titel stehen symmetrisch darüber und darunter -
-       gleicher Abstand nach oben wie nach unten. Gemessen an den
-       Originalkarten: Blockmitten bei 22 % und 78 % der Kartenhöhe. */
-    var mitteH = y + s / 2;
+    /* Originalkarten-Anordnung mit FESTEN Bereichen:
+       Der Interpret beginnt immer an derselben Höhe und wächst nur
+       nach unten, der Titel ebenso. Passt ein Text nicht in seinen
+       Bereich, wird nur dieser Text kleiner - die Startpunkte
+       bleiben dadurch auf allen Karten gleich. */
+    var bandHoehe = s * 0.205;
+    var aOben = y + s * 0.125;          /* Oberkante des Interpreten */
+    var tOben = y + s * 0.645;          /* Oberkante des Titels */
 
-    /* Jahr: Ziffernmitte auf die Kartenmitte legen */
-    var yJ2 = mitteH + mmAus(34, s) * 0.36;
+    var aBand = passtInBand(doc, song.artist, breite, bandHoehe, ptText);
+    var tBand = passtInBand(doc, song.title, breite, bandHoehe, ptText);
+
+    /* Jahr: Ziffernmitte exakt auf die Kartenmitte */
+    var yJ2 = y + s / 2 + mmAus(34, s) * 0.36;
     textMitKontur(doc, [String(song.year || '?')], cx, yJ2, ptJahr, d.yearColor, d.yearOn, d.yearOutline, 0);
 
-    /* Interpret und Titel bekommen denselben Randabstand: Der Interpret
-       wächst vom Rand nach unten, der Titel vom Rand nach oben. Dadurch
-       bleibt oben und unten gleich viel Luft, egal wie viele Zeilen. */
-    /* Je mehr Zeilen, desto näher rücken die Blöcke an den Rand -
-       so bleibt zwischen Text und Jahreszahl immer genug Luft. */
-    var maxZeilen = Math.max(aZeilen.length, tZeilen.length);
-    var rand = s * (maxZeilen >= 3 ? 0.105 : (maxZeilen === 2 ? 0.130 : 0.155));
+    /* Grundlinie so setzen, dass die OBERKANTE der Buchstaben immer
+       an derselben Stelle sitzt - auch wenn die Schrift kleiner wird */
+    var yA = aOben + aBand.pt * 25.4 / 72 * 0.72;
+    textMitKontur(doc, aBand.zeilen, cx, yA, aBand.pt, d.artistColor, d.artistOn, d.artistOutline, aBand.zh);
 
-    var yA = y + rand + zhA * 0.34;
-    textMitKontur(doc, aZeilen, cx, yA, ptA, d.artistColor, d.artistOn, d.artistOutline, zhA);
-
-    var yT = y + s - rand - (tZeilen.length - 1) * zhT - zhT * 0.22 + mmAus(2.0, s);   /* Grundlinien-Ausgleich */
-    textMitKontur(doc, tZeilen, cx, yT, ptT, d.titleColor, d.titleOn, d.titleOutline, zhT);
+    var yT = tOben + tBand.pt * 25.4 / 72 * 0.72;
+    textMitKontur(doc, tBand.zeilen, cx, yT, tBand.pt, d.titleColor, d.titleOn, d.titleOutline, tBand.zh);
   } else {
     /* Kompakt: Jahr exakt mittig, Interpret und Titel wachsen nach außen */
     var mitte = y + s / 2;
@@ -1933,19 +1999,17 @@ document.addEventListener('DOMContentLoaded', function () {
     setzeDesign('borders', an);
   });
 
-  $('#dsImage').addEventListener('change', function () {
+    $('#dsImage').addEventListener('change', function () {
     var f = this.files && this.files[0];
     if (!f) return;
     if (f.size > 50 * 1024 * 1024) { toast('Bild ist größer als 50 MB'); return; }
-    toast('Bild wird geladen \u2026');
-    var r = new FileReader();
-    r.onload = function () {
-      deckImage = r.result;
-      imgSave(r.result).catch(function () { toast('Bild konnte nicht dauerhaft gespeichert werden'); });
+    toast('Bild wird vorbereitet \u2026');
+    bildAufbereiten(f, 1000, true).then(function (png) {
+      deckImage = png;
+      imgSave(png).catch(function () { toast('Bild konnte nicht dauerhaft gespeichert werden'); });
       $('#dsImageName').textContent = f.name;
       renderDesignPreview();
-    };
-    r.readAsDataURL(f);
+    }).catch(function () { toast('Das Bild konnte nicht gelesen werden'); });
   });
   $('#dsImageClear').addEventListener('click', function () {
     imgClear();
