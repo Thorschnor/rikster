@@ -23,6 +23,12 @@ var DESIGN_STD = {
   qrBorder: '#FFFFFF',
   qrBorderW: 3,
   label: '',
+  labelColor: '#FFFFFF',
+  labelWeight: 'normal',
+  labelWo: 'beide',
+  symbolGroesse: 13,
+  symbolEcke: 'ol',
+  symbolWo: 'front',
   hitster: true,
   hitFormat: false,
   solBg: '#FFFFFF',
@@ -38,7 +44,8 @@ var VORSCHAU_PX = 120;
 
 var deck = { songs: [], design: {} };
 Object.keys(DESIGN_STD).forEach(function (k) { deck.design[k] = DESIGN_STD[k]; });
-var deckImage = null;   /* Hintergrundbild als Data-URL, liegt in IndexedDB */
+var deckImage = null;    /* Hintergrundbild als Data-URL, liegt in IndexedDB */
+var deckSymbol = null;   /* Editions-Symbol als Data-URL */
 
 /* ============================================================
    SPEICHER
@@ -84,11 +91,53 @@ function imgLoad() {
   return idb().then(function (db) {
     return new Promise(function (res) {
       var tx = db.transaction('kv', 'readonly');
-      var q = tx.objectStore('kv').get('cardImage');
-      q.onsuccess = function () { deckImage = q.result || null; res(); };
-      q.onerror = function () { res(); };
+      var laden = 2;
+      function fertig() { if (--laden <= 0) res(); }
+      var q1 = tx.objectStore('kv').get('cardImage');
+      q1.onsuccess = function () { deckImage = q1.result || null; fertig(); };
+      q1.onerror = fertig;
+      var q2 = tx.objectStore('kv').get('cardSymbol');
+      q2.onsuccess = function () { deckSymbol = q2.result || null; fertig(); };
+      q2.onerror = fertig;
     });
   }).catch(function () { /* egal */ });
+}
+
+function symbolSpeichern(dataUrl) {
+  return idb().then(function (db) {
+    var tx = db.transaction('kv', 'readwrite');
+    tx.objectStore('kv').put(dataUrl, 'cardSymbol');
+  }).catch(function () { /* egal */ });
+}
+function symbolLoeschen() {
+  deckSymbol = null;
+  return idb().then(function (db) {
+    var tx = db.transaction('kv', 'readwrite');
+    tx.objectStore('kv').delete('cardSymbol');
+  }).catch(function () { /* egal */ });
+}
+
+/* Bild auf handliche Größe bringen und in PNG umwandeln -
+   so kommt es zuverlässig in die PDF und bläht sie nicht auf. */
+function bildAufbereiten(datei, maxKante) {
+  return new Promise(function (res, rej) {
+    var leser = new FileReader();
+    leser.onload = function () {
+      var bild = new Image();
+      bild.onload = function () {
+        var k = Math.min(1, maxKante / Math.max(bild.width, bild.height));
+        var b = Math.round(bild.width * k), hh = Math.round(bild.height * k);
+        var c = document.createElement('canvas');
+        c.width = b; c.height = hh;
+        c.getContext('2d').drawImage(bild, 0, 0, b, hh);
+        try { res(c.toDataURL('image/png')); } catch (e) { rej(e); }
+      };
+      bild.onerror = function () { rej(new Error('Bild nicht lesbar')); };
+      bild.src = leser.result;
+    };
+    leser.onerror = function () { rej(new Error('Datei nicht lesbar')); };
+    leser.readAsDataURL(datei);
+  });
 }
 function imgClear() {
   deckImage = null;
@@ -121,6 +170,32 @@ var FRAMES = [
   { id: 'star', name: 'Sternenkranz' },
   { id: 'speaker', name: 'Lautsprecher' }
 ];
+
+/* Soll die Beschriftung auf dieser Seite erscheinen? */
+function labelZeigen(seite) {
+  var d = deck.design;
+  if (!d.label) return false;
+  if (d.labelWo === 'beide') return true;
+  return d.labelWo === seite;
+}
+
+/* Soll das Symbol auf dieser Seite erscheinen? */
+function symbolZeigen(seite) {
+  var d = deck.design;
+  if (!deckSymbol) return false;
+  if (d.symbolWo === 'beide') return true;
+  return d.symbolWo === seite;
+}
+
+/* Ecke des Symbols als Anteil der Kartenbreite */
+function symbolEckePos(ecke, groesse, rand) {
+  var links = (ecke === 'ol' || ecke === 'ul');
+  var oben = (ecke === 'ol' || ecke === 'or');
+  return {
+    x: links ? rand : (1 - rand - groesse),
+    y: oben ? rand : (1 - rand - groesse)
+  };
+}
 
 function saat(text) {
   var h = 0;
@@ -327,17 +402,30 @@ function kartenVorderseite(song, px) {
   box.innerHTML = qrSvg(song.link, '#000000', '#FFFFFF');
   el.appendChild(box);
 
-  if (d.label) {
+  if (labelZeigen('front')) {
     var lab = document.createElement('div');
     lab.className = 'plabel';
-    lab.style.color = d.qrBorder;
+    lab.style.color = d.labelColor;
     lab.textContent = d.label;
     if (px) {
       var fv = px / VORSCHAU_PX;
       lab.style.cssText += ';position:absolute;bottom:' + (5 * fv).toFixed(1) +
-        'px;left:0;right:0;text-align:center;font-size:' + (7 * fv).toFixed(2) + 'px;letter-spacing:.08em';
+        'px;left:0;right:0;text-align:center;font-weight:' + (d.labelWeight === 'fett' ? 900 : 800) +
+        ';font-size:' + (7 * fv).toFixed(2) + 'px;letter-spacing:.08em';
     }
     el.appendChild(lab);
+  }
+
+  /* Editions-Symbol in der gewählten Ecke */
+  if (symbolZeigen('front') && px) {
+    var g = d.symbolGroesse / 100;
+    var pos = symbolEckePos(d.symbolEcke, g, 0.05);
+    var sym = document.createElement('img');
+    sym.src = deckSymbol;
+    sym.alt = '';
+    sym.style.cssText = 'position:absolute;left:' + (pos.x * 100).toFixed(1) + '%;top:' + (pos.y * 100).toFixed(1) +
+      '%;width:' + (g * 100).toFixed(1) + '%;height:' + (g * 100).toFixed(1) + '%;object-fit:contain';
+    el.appendChild(sym);
   }
   return el;
 }
@@ -417,13 +505,25 @@ function kartenRueckseite(song, jahre, px) {
     el.appendChild(a); el.appendChild(y); el.appendChild(t);
   }
 
-  if (d.label) {
+  if (symbolZeigen('back') && px) {
+    var gb = d.symbolGroesse / 100;
+    var posB = symbolEckePos(d.symbolEcke, gb, 0.05);
+    var symB = document.createElement('img');
+    symB.src = deckSymbol;
+    symB.alt = '';
+    symB.style.cssText = 'position:absolute;left:' + (posB.x * 100).toFixed(1) + '%;top:' + (posB.y * 100).toFixed(1) +
+      '%;width:' + (gb * 100).toFixed(1) + '%;height:' + (gb * 100).toFixed(1) + '%;object-fit:contain';
+    el.appendChild(symB);
+  }
+
+  if (labelZeigen('back')) {
     var lab = document.createElement('div');
     lab.className = 'plabel2';
-    lab.style.color = d.titleColor;
+    lab.style.color = d.labelColor;
     lab.textContent = d.label;
     if (px) lab.style.cssText += ';position:absolute;bottom:' + (4 * f).toFixed(1) +
-      'px;left:0;right:0;text-align:center;font-size:' + (6 * f).toFixed(2) + 'px;opacity:.7';
+      'px;left:0;right:0;text-align:center;font-weight:' + (d.labelWeight === 'fett' ? 900 : 800) +
+      ';font-size:' + (6 * f).toFixed(2) + 'px';
     el.appendChild(lab);
   }
   return el;
@@ -660,68 +760,130 @@ function onAddLinks() {
   toast('Keine Spotify-Links erkannt');
 }
 
-function ladeTracks(ids) {
-  var alle = [];
-  var fehler = null;
-  fsZeige('Songs werden geladen \u2026', 0, ids.length);
+/* ---------- Songdaten merken ----------
+   Einmal geladene Songs landen dauerhaft im Speicher. Fügst du
+   dieselbe Playlist noch einmal ein, kostet das keine einzige
+   Anfrage mehr - das schont Spotifys Anfragekontingent. */
+function songCacheLies() {
+  try { return JSON.parse(localStorage.getItem('rikster_songs') || '{}'); } catch (e) { return {}; }
+}
+function songCacheSchreib(map) {
+  try {
+    var schluessel = Object.keys(map);
+    if (schluessel.length > 4000) {
+      var neu2 = {};
+      schluessel.slice(-3000).forEach(function (k) { neu2[k] = map[k]; });
+      map = neu2;
+    }
+    localStorage.setItem('rikster_songs', JSON.stringify(map));
+  } catch (e) { /* egal */ }
+}
 
-  /* Zuerst gebündelt abfragen: 50 Songs mit EINER Anfrage. Das schont
-     das Anfragekontingent enorm. Lehnt Spotify das ab, holen wir die
-     Songs einzeln - langsamer, aber zuverlässig. */
+function ladeTracks(ids) {
+  var gemerkt = songCacheLies();
+  var alle = [];
+  var offen = [];
+  var fehler = null;
+  var gebremst = false;
+
+  /* Schon bekannte Songs sofort übernehmen */
+  ids.forEach(function (id) {
+    if (gemerkt[id]) alle.push(gemerkt[id]);
+    else offen.push(id);
+  });
+
+  if (!offen.length) {
+    fsZeige('Songs werden übernommen \u2026', ids.length, ids.length);
+    return uebernehmen(alle, ids.length, gemerkt);
+  }
+
+  fsZeige('Songs werden geladen \u2026', ids.length - offen.length, ids.length);
+
+  function merke(t) {
+    if (!t || !t.id) return;
+    var eintrag = {
+      id: t.id,
+      name: t.name,
+      artists: (t.artists || []).map(function (a) { return { name: a.name }; }),
+      album: { release_date: (t.album && t.album.release_date) || '' }
+    };
+    gemerkt[t.id] = eintrag;
+    alle.push(eintrag);
+  }
+
+  /* Zuerst gebündelt: 50 Songs mit EINER Anfrage */
   function buendel(i) {
-    if (i >= ids.length) return Promise.resolve(true);
-    var teil = ids.slice(i, i + 50);
+    if (i >= offen.length) return Promise.resolve(true);
+    var teil = offen.slice(i, i + 50);
     return api('/tracks?ids=' + teil.join(',')).then(function (res) {
-      if (!res.ok) {
-        return readApiError(res).then(function (d) { fehler = d; return false; });
-      }
+      if (res.status === 429) { gebremst = true; return false; }
+      if (!res.ok) return readApiError(res).then(function (d) { fehler = d; return false; });
       return res.json().then(function (j) {
-        (j.tracks || []).forEach(function (t) { if (t && t.id) alle.push(t); });
-        fsZeige('Songs werden geladen \u2026', Math.min(i + 50, ids.length), ids.length);
+        (j.tracks || []).forEach(merke);
+        fsZeige('Songs werden geladen \u2026', ids.length - offen.length + Math.min(i + 50, offen.length), ids.length);
         return buendel(i + 50);
       });
     }).catch(function () { return false; });
   }
 
+  /* Nur falls der Bündel-Weg gesperrt ist: einzeln, aber gemächlich */
   function einzeln(i) {
-    if (i >= ids.length) return Promise.resolve();
-    return api('/tracks/' + ids[i]).then(function (res) {
+    if (i >= offen.length || gebremst) return Promise.resolve();
+    return api('/tracks/' + offen[i]).then(function (res) {
+      if (res.status === 429) { gebremst = true; return null; }
       if (!res.ok) {
         if (!fehler) return readApiError(res).then(function (d) { fehler = d; return null; });
         return null;
       }
       return res.json();
     }).then(function (t) {
-      if (t && t.id) alle.push(t);
-      fsZeige('Songs werden geladen \u2026', i + 1, ids.length);
-      return einzeln(i + 1);
-    }).catch(function () {
-      return einzeln(i + 1);
-    });
+      merke(t);
+      fsZeige('Songs werden geladen \u2026', ids.length - offen.length + i + 1, ids.length);
+      if (gebremst) return;
+      return new Promise(function (r) { setTimeout(r, 250); }).then(function () { return einzeln(i + 1); });
+    }).catch(function () { return einzeln(i + 1); });
   }
 
   return buendel(0).then(function (geklappt) {
-    if (geklappt && alle.length) return null;
-    /* Bündel-Weg hat nicht funktioniert - einzeln nachholen */
-    alle = [];
-    fehler = null;
+    if (geklappt || gebremst) return null;
     return einzeln(0);
   }).then(function () {
-    if (!alle.length) {
-      fsAus();
-      openModal({
-        title: 'Songs konnten nicht geladen werden',
-        text: 'Spotify hat den Abruf abgelehnt.' + (fehler ? '\n\nTechnik: ' + fehler : '') +
-          '\n\nPrüfe im Hauptmenü unter „Verbindungs-Check", ob dein Konto im Spotify-Dashboard freigeschaltet ist.',
-        primary: 'OK'
-      });
-      return;
-    }
-    alle.forEach(function (t) { addSong(t, false, true); });
-    deckSave(); renderDeck();
-    var fehlend = ids.length - alle.length;
-    if (fehlend) toast(fehlend + (fehlend === 1 ? ' Song war nicht abrufbar' : ' Songs waren nicht abrufbar'));
-    return jahreNachziehen();
+    return uebernehmen(alle, ids.length, gemerkt, fehler, gebremst);
+  });
+}
+
+function uebernehmen(alle, gewuenscht, gemerkt, fehler, gebremst) {
+  songCacheSchreib(gemerkt);
+  if (!alle.length) {
+    fsAus();
+    if (gebremst) { zeigeBremse(); return Promise.resolve(); }
+    openModal({
+      title: 'Songs konnten nicht geladen werden',
+      text: 'Spotify hat den Abruf abgelehnt.' + (fehler ? '\n\nTechnik: ' + fehler : '') +
+        '\n\nPrüfe im Hauptmenü unter „Verbindungs-Check", ob dein Konto im Spotify-Dashboard freigeschaltet ist.',
+      primary: 'OK'
+    });
+    return Promise.resolve();
+  }
+  alle.forEach(function (t) { addSong(t, false, true); });
+  deckSave(); renderDeck();
+  var fehlend = gewuenscht - alle.length;
+  if (gebremst) { fsAus(); zeigeBremse(alle.length, gewuenscht); return Promise.resolve(); }
+  if (fehlend) toast(fehlend + (fehlend === 1 ? ' Song war nicht abrufbar' : ' Songs waren nicht abrufbar'));
+  return jahreNachziehen();
+}
+
+/* Spotify hat das Anfragekontingent gesperrt - das lässt sich in der
+   App nicht umgehen, es gibt sich nach kurzer Zeit von selbst. */
+function zeigeBremse(geladen, gewuenscht) {
+  openModal({
+    title: 'Spotify bremst gerade',
+    text: (geladen ? geladen + ' von ' + gewuenscht + ' Songs sind geladen.\n\n' : '') +
+      'Spotify hat das Anfragelimit deines Entwickler-Kontos erreicht (Fehler 429) und lehnt weitere Abrufe vorerst ab. ' +
+      'Das liegt nicht an der App und lässt sich auch nicht umgehen.\n\n' +
+      'Warte ein paar Minuten und füge den Rest dann erneut ein \u2013 bereits geladene Songs sind gespeichert ' +
+      'und kosten keine neue Anfrage.',
+    primary: 'Verstanden'
   });
 }
 
@@ -1006,6 +1168,14 @@ function applyDesignInputs() {
   $('#dsQrBorderW').value = d.qrBorderW;
   $('#dsQrBorderWVal').textContent = String(d.qrBorderW);
   $('#dsLabel').value = d.label || '';
+  $('#dsLabelColor').style.background = d.labelColor;
+  $('#dsLabelWeight').value = d.labelWeight;
+  $('#dsLabelWo').value = d.labelWo;
+  $('#dsSymbolGroesse').value = d.symbolGroesse;
+  $('#dsSymbolGroesseVal').textContent = d.symbolGroesse + '%';
+  $('#dsSymbolEcke').value = d.symbolEcke;
+  $('#dsSymbolWo').value = d.symbolWo;
+  $('#dsSymbolName').textContent = deckSymbol ? 'Symbol aktiv' : '';
   $('#dsHitster').setAttribute('aria-checked', d.hitster ? 'true' : 'false');
   $('#dsSolBg').style.background = d.solBg;
   $('#rowSolBg').style.display = d.hitster ? 'none' : '';
@@ -1426,13 +1596,36 @@ function karteVornPdf(doc, song, x, y, s) {
   var rand = qs * 0.06;
   qrPdf(doc, song.link, qx + rand, qy + rand, qs - 2 * rand);
 
-  if (d.label) {
-    var lc = rgbStr(d.qrBorder);
-    doc.setTextColor(lc[0], lc[1], lc[2]);
-    doc.setFont('Montserrat', 'bold');
-    doc.setFontSize(ptAus(7, s));
-    doc.text(String(d.label), x + s / 2, y + s - mmAus(6, s), { align: 'center' });
+  if (labelZeigen('front')) {
+    beschriftungPdf(doc, d.label, x + s / 2, y + s - mmAus(6, s), ptAus(7, s));
   }
+
+  /* Editions-Symbol in der gewählten Ecke */
+  if (symbolZeigen('front')) {
+    var g = (d.symbolGroesse / 100) * s;
+    var pos = symbolEckePos(d.symbolEcke, d.symbolGroesse / 100, 0.05);
+    try {
+      doc.addImage(deckSymbol, 'PNG', x + pos.x * s, y + pos.y * s, g, g, undefined, 'FAST');
+    } catch (e) { /* Symbol nicht verwendbar - Karte bleibt trotzdem korrekt */ }
+  }
+}
+
+/* Beschriftung mit Farbe und Stärke - "fett" wird durch eine feine
+   Kontur in derselben Farbe erzeugt, da nur ein Schriftschnitt
+   eingebettet ist. */
+function beschriftungPdf(doc, text, cx, y, pt) {
+  var d = deck.design;
+  var c = rgbStr(d.labelColor);
+  doc.setFont('Montserrat', 'bold');
+  doc.setFontSize(pt);
+  doc.setTextColor(c[0], c[1], c[2]);
+  if (d.labelWeight === 'fett') {
+    doc.setDrawColor(c[0], c[1], c[2]);
+    doc.setLineWidth(pt * 25.4 / 72 * 0.045);
+    doc.text(String(text), cx, y, { align: 'center', renderingMode: 'fillThenStroke' });
+    return;
+  }
+  doc.text(String(text), cx, y, { align: 'center' });
 }
 
 function textMitKontur(doc, zeilen, cx, y, groesse, farbeText, konturAn, farbeKontur, zeilenhoehe) {
@@ -1532,11 +1725,16 @@ function karteHintenPdf(doc, song, x, y, s, jahre) {
     textMitKontur(doc, tZeilen, cx, yT2, ptT, d.titleColor, d.titleOn, d.titleOutline, zhT);
   }
 
-  if (d.label) {
-    var lc = rgbStr(d.titleColor);
-    doc.setTextColor(lc[0], lc[1], lc[2]);
-    doc.setFontSize(ptAus(6, s));
-    doc.text(String(d.label), cx, y + s - mmAus(5, s), { align: 'center' });
+  if (symbolZeigen('back')) {
+    var gb = (d.symbolGroesse / 100) * s;
+    var posB = symbolEckePos(d.symbolEcke, d.symbolGroesse / 100, 0.05);
+    try {
+      doc.addImage(deckSymbol, 'PNG', x + posB.x * s, y + posB.y * s, gb, gb, undefined, 'FAST');
+    } catch (e) { /* Symbol nicht verwendbar - Karte bleibt trotzdem korrekt */ }
+  }
+
+  if (labelZeigen('back')) {
+    beschriftungPdf(doc, d.label, cx, y + s - mmAus(5, s), ptAus(6, s));
   }
 }
 
@@ -1674,6 +1872,35 @@ document.addEventListener('DOMContentLoaded', function () {
     setzeDesign('qrBorderW', parseInt(this.value, 10));
   });
   $('#dsLabel').addEventListener('input', function () { setzeDesign('label', this.value); });
+  bindeFarbe('dsLabelColor', 'labelColor', 'Farbe der Beschriftung');
+  $('#dsLabelWeight').addEventListener('change', function () { setzeDesign('labelWeight', this.value); });
+  $('#dsLabelWo').addEventListener('change', function () { setzeDesign('labelWo', this.value); });
+
+  $('#dsSymbolGroesse').addEventListener('input', function () {
+    $('#dsSymbolGroesseVal').textContent = this.value + '%';
+    setzeDesign('symbolGroesse', parseInt(this.value, 10));
+  });
+  $('#dsSymbolEcke').addEventListener('change', function () { setzeDesign('symbolEcke', this.value); });
+  $('#dsSymbolWo').addEventListener('change', function () { setzeDesign('symbolWo', this.value); });
+
+  $('#dsSymbol').addEventListener('change', function () {
+    var f = this.files && this.files[0];
+    if (!f) return;
+    if (f.size > 20 * 1024 * 1024) { toast('Symbol ist größer als 20 MB'); return; }
+    toast('Symbol wird vorbereitet \u2026');
+    bildAufbereiten(f, 400).then(function (png) {
+      deckSymbol = png;
+      symbolSpeichern(png);
+      $('#dsSymbolName').textContent = f.name;
+      renderDesignPreview();
+    }).catch(function () { toast('Das Bild konnte nicht gelesen werden'); });
+  });
+  $('#dsSymbolClear').addEventListener('click', function () {
+    symbolLoeschen();
+    $('#dsSymbol').value = '';
+    $('#dsSymbolName').textContent = '';
+    renderDesignPreview();
+  });
 
   $('#dsHitster').addEventListener('click', function () {
     var an = !deck.design.hitster;

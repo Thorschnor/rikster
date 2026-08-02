@@ -363,7 +363,32 @@
         <label class="design-row"><span>Konturdicke</span>
           <span class="design-range"><input type="range" id="dsQrBorderW" min="0" max="8" step="1" value="3"><b id="dsQrBorderWVal">3</b></span>
         </label>
-        <label class="design-row"><span>Beschriftung</span><input type="text" id="dsLabel" maxlength="24" placeholder="z.&nbsp;B. 80er Edition"></label>
+        <div class="design-row"><span>Editions-Symbol</span>
+          <span class="upload-wrap">
+            <label class="btn btn-ghost btn-sm" for="dsSymbol">Bild wählen</label>
+            <input type="file" id="dsSymbol" accept="image/png,image/jpeg,image/webp">
+            <button class="btn btn-ghost btn-sm" id="dsSymbolClear">Entfernen</button>
+          </span>
+        </div>
+        <p class="design-note" id="dsSymbolName"></p>
+        <div class="design-row"><span>Symbol-Größe</span>
+          <span class="design-range"><input type="range" id="dsSymbolGroesse" min="6" max="26" step="1" value="13"><b id="dsSymbolGroesseVal">13%</b></span>
+        </div>
+        <div class="design-row"><span>Symbol-Ecke</span>
+          <select id="dsSymbolEcke">
+            <option value="ol">Oben links</option>
+            <option value="or">Oben rechts</option>
+            <option value="ul">Unten links</option>
+            <option value="ur">Unten rechts</option>
+          </select>
+        </div>
+        <div class="design-row"><span>Symbol anzeigen auf</span>
+          <select id="dsSymbolWo">
+            <option value="front">Nur QR-Seite</option>
+            <option value="back">Nur Lösungsseite</option>
+            <option value="beide">Beiden Seiten</option>
+          </select>
+        </div>
         <div class="design-row"><span>Hintergrundbild</span>
           <span class="upload-wrap">
             <label class="btn btn-ghost btn-sm" for="dsImage">Bild wählen</label>
@@ -413,6 +438,25 @@
       </div>
 
       <div class="design-preview big" id="dsPreviewBack"></div>
+
+      <h3 class="design-head">Beschriftung</h3>
+      <div class="design-grid">
+        <div class="design-row"><span>Text</span><input type="text" id="dsLabel" maxlength="24" placeholder="z.&nbsp;B. 80er Edition"></div>
+        <div class="design-row"><span>Farbe</span><button class="colorbtn" id="dsLabelColor" aria-label="Farbe wählen"></button></div>
+        <div class="design-row"><span>Schriftstärke</span>
+          <select id="dsLabelWeight">
+            <option value="normal">Normal</option>
+            <option value="fett">Fett</option>
+          </select>
+        </div>
+        <div class="design-row"><span>Anzeigen auf</span>
+          <select id="dsLabelWo">
+            <option value="beide">Beiden Seiten</option>
+            <option value="front">Nur QR-Seite</option>
+            <option value="back">Nur Lösungsseite</option>
+          </select>
+        </div>
+      </div>
 
       <h3 class="design-head">Druck</h3>
       <div class="design-grid">
